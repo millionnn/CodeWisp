@@ -1,0 +1,18 @@
+[project]
+name = "codewisp"
+version = "0.1.0"
+description = "CodeWisp — a from-scratch coding agent with Web IDE (V0.1: minimal LLM CLI)"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.40.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
