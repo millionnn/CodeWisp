@@ -43,7 +43,14 @@ pytest
 
 CodeWisp 是从零实现的编程智能体（Coding Agent）：面向自然语言编程任务，目标能力包括探索代码仓库、读写与修改代码、执行本地命令与测试，并根据结果迭代修复。实现上不封装 Claude Code / Codex 等现成产品，也不使用 LangChain、LlamaIndex、OpenAI Agents SDK、Claude Agent SDK、AutoGen、CrewAI 等 Agent 框架；对话历史、工具定义与本地执行、模型输出解析、循环终止与错误处理等关键逻辑自行编写。模型侧使用厂商官方或 OpenAI 兼容 API（当前默认对接 DeepSeek），凭据仅通过环境变量 / 未入库配置提供。
 
-当前仓库已具备可运行的命令行对话入口、可复用的 LLM 客户端，以及基础多轮对话历史管理；后续将继续完善工具系统、Agent 循环、编码工具与 Web IDE 等能力。
+当前已具备：可运行的命令行多轮对话、可复用 LLM 客户端、基础对话历史，以及与 UI/LLM 解耦的本地 Tool System（工具定义、注册表、统一执行器与结构化结果；内置安全计算器与本地时间工具）。Agent 自动调用工具、编码类文件/Shell 工具与 Web IDE 等能力按架构继续演进。
+
+可选：验证工具系统（无需 API Key）：
+
+```bash
+python -m backend.app.tools list
+python -m backend.app.tools run calculator '{"expression":"12 * 8 + 5"}'
+```
 
 ## 其它说明
 

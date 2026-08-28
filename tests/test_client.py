@@ -11,6 +11,7 @@ from openai import APIConnectionError, APIError, AuthenticationError
 from backend.app.llm.client import LLMClient, LLMConfig
 from backend.app.llm.errors import ConfigError, LLMNetworkError, LLMRequestError
 from backend.app.llm.messages import Conversation
+from backend.app.llm.response import LLMResponse
 
 
 def test_config_from_env_success(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -49,7 +50,12 @@ def test_config_empty_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_chat_success_with_mock() -> None:
     mock_openai = MagicMock()
     mock_openai.chat.completions.create.return_value = SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content="pong"))]
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="pong", tool_calls=None),
+                finish_reason="stop",
+            )
+        ]
     )
 
     config = LLMConfig(api_key="sk-test", base_url="https://example.com/v1", model="m")
@@ -57,7 +63,43 @@ def test_chat_success_with_mock() -> None:
 
     conv = Conversation()
     conv.add_user("ping")
-    assert client.chat(conv) == "pong"
+    response = client.chat(conv)
+    assert isinstance(response, LLMResponse)
+    assert response.content == "pong"
+    assert response.text == "pong"
+    assert response.finish_reason == "stop"
+    assert response.tool_calls == ()
+    assert response.has_tool_calls is False
+    assert response.raw_response is not None
+
+
+def test_chat_maps_tool_calls_without_executing() -> None:
+    """预留解析 tool_calls；本阶段不执行工具。"""
+    mock_openai = MagicMock()
+    mock_tc = SimpleNamespace(
+        id="call_1",
+        function=SimpleNamespace(name="calculator", arguments='{"expression":"1+1"}'),
+    )
+    mock_openai.chat.completions.create.return_value = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=None, tool_calls=[mock_tc]),
+                finish_reason="tool_calls",
+            )
+        ]
+    )
+
+    config = LLMConfig(api_key="sk-test", base_url="https://example.com/v1", model="m")
+    client = LLMClient(config, client=mock_openai)
+    conv = Conversation()
+    conv.add_user("算一下")
+    response = client.chat(conv)
+
+    assert response.content is None
+    assert response.finish_reason == "tool_calls"
+    assert len(response.tool_calls) == 1
+    assert response.tool_calls[0].name == "calculator"
+    assert response.tool_calls[0].arguments == {"expression": "1+1"}
 
 
 def test_chat_auth_error() -> None:

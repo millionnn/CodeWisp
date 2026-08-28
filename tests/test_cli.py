@@ -6,6 +6,7 @@ from backend.app.cli.interface import EXIT_COMMANDS, run_cli
 from backend.app.llm.client import LLMClient, LLMConfig
 from backend.app.llm.errors import LLMRequestError
 from backend.app.llm.messages import Conversation
+from backend.app.llm.response import LLMResponse
 
 
 class FakeLLMClient(LLMClient):
@@ -17,17 +18,17 @@ class FakeLLMClient(LLMClient):
         self._client = None  # type: ignore[assignment]
         self.calls: list[list[dict[str, str]]] = []
 
-    def chat(self, conversation: Conversation) -> str:
+    def chat(self, conversation: Conversation) -> LLMResponse:
         self.calls.append(conversation.to_api_messages())
         last_user = next(
             (m.content for m in reversed(conversation.messages) if m.role == "user"),
             "",
         )
-        return f"echo:{last_user}"
+        return LLMResponse(content=f"echo:{last_user}", finish_reason="stop")
 
 
 class FailingLLMClient(FakeLLMClient):
-    def chat(self, conversation: Conversation) -> str:
+    def chat(self, conversation: Conversation) -> LLMResponse:
         raise LLMRequestError("模拟失败")
 
 

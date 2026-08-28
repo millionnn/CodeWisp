@@ -77,14 +77,16 @@ def run_cli(
         conversation.add_user(user_text)
 
         try:
-            reply = client.chat(conversation)
+            response = client.chat(conversation)
         except CodeWispError as exc:
             # 回滚本轮 user，避免失败请求污染对话历史。
             conversation.messages.pop()
             output_fn(f"错误：{exc}")
             continue
 
-        conversation.add_assistant(reply)
-        output_fn(f"CodeWisp:\n{reply}\n")
+        # CLI 只消费领域对象的文本；不触碰 SDK 原始结构。
+        text = response.text
+        conversation.add_assistant(text)
+        output_fn(f"CodeWisp:\n{text}\n")
 
     return 0  # pragma: no cover
