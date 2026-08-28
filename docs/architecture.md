@@ -1,8 +1,8 @@
 # CodeWisp 架构说明
 
-> **说明：** 标注为「最终架构 / 未来架构」的内容描述目标形态，**当前尚未全部实现**，请勿误认为已全部落地。
+> **说明：** 标注为「最终架构 / 未来架构」的内容描述目标形态，**当前尚未全部实现**。
 
-## 当前已实现
+## 版本演进（已实现）
 
 ### V0.1：对话 CLI + LLM Client
 
@@ -10,89 +10,72 @@
 用户 → CLI → LLM Client → LLM API → CLI
 ```
 
-| 模块 | 职责 |
-|------|------|
-| `backend/app/cli/` | 终端输入输出 |
-| `backend/app/llm/` | Conversation、LLM Client、`LLMResponse` 领域对象、领域异常 |
-| `backend/app/main.py` | 组装配置与 CLI |
-
-`LLMClient.chat()` 返回领域对象 `LLMResponse`（`content` / `tool_calls` / `finish_reason` / `raw_response`），SDK 的 `choices[0].message` 不向外传播。当前 CLI 只使用 `.text`；`tool_calls` 已可解析但**不会自动执行**（留给 V0.3 Agent Loop）。
-
 ### V0.2：Tool System
 
 ```
-Tool 定义
+Tool → ToolRegistry → ToolExecutor → ToolResult
+```
+
+与 UI / LLM 解耦；内置 `calculator`、`get_current_time`。
+
+### V0.3：Agent Loop（当前）
+
+```
+User
   ↓
-ToolRegistry（注册 / 查找）
+AgentLoop
   ↓
-ToolExecutor（按名称 + 参数执行）
+LLMClient (+ tools schema) → LLMResponse
   ↓
-ToolResult（success / output / error / metadata）
+有 tool_calls？
+  ├─ 否 → Final Answer → COMPLETED
+  └─ 是 → ToolExecutor → ToolResult
+            ↓
+         Observation 写回 Conversation
+            ↓
+         再次调用 LLM …（直至终止 / max_steps）
 ```
 
 | 模块 | 职责 |
 |------|------|
-| `backend/app/tools/base.py` | Tool 抽象（name / description / parameters / execute） |
-| `backend/app/tools/result.py` | 统一 `ToolResult` |
-| `backend/app/tools/registry.py` | 注册表 |
-| `backend/app/tools/executor.py` | 统一执行与参数校验 |
-| `backend/app/tools/builtin/` | 内置工具：`calculator`、`get_current_time` |
+| `backend/app/agent/loop.py` | Agent 编排：LLM ↔ Tool ↔ Observation |
+| `backend/app/agent/state.py` | `AgentState` / `AgentStatus` |
+| `backend/app/agent/events.py` | 轻量事件（无 Event Bus，供未来 Trace） |
+| `backend/app/llm/` | Conversation（含 tool）、LLMClient、LLMResponse |
+| `backend/app/tools/` | Tool System（V0.2） |
+| `backend/app/cli/` | 仅 UI：输入任务、展示结果与工具轨迹 |
 
-**边界（刻意为之）：**
+**边界：**
 
-- Tool System **不**依赖 CLI / LLM / FastAPI / React
-- V0.2 **不**实现 Agent Loop，也 **不**让 LLM 自动调用工具
-- 编码类工具（读文件、写文件、Shell 等）属于 **V0.4**
-- 人工验证入口：`python -m backend.app.tools`（不经 LLM）
+- LLMClient **只**做 Model I/O，不执行工具
+- ToolExecutor **不知道** LLM
+- CLI **不**实现 while tool_calls
+- Coding Tools（读文件 / Shell 等）属于 **V0.4**
 
-`ToolResult.metadata` 含 `tool_name`、`arguments`、`duration_ms`，为未来 V0.8 Trace UI 预留结构，当前无 Event Bus / WebSocket。
+## 终止条件
 
-## 设计原则（已生效）
+| 状态 | 含义 |
+|------|------|
+| `COMPLETED` | 模型未再返回 tool_calls，产出最终回答 |
+| `MAX_STEPS` | 达到 `max_steps`（默认 10） |
+| `FAILED` | 不可恢复错误（如 LLM 请求失败） |
 
-**Agent 核心与 UI 解耦**
-
-```
-当前：  CLI  →  LLM Client
-        （独立）ToolExecutor → Registry → Tool
-
-未来：  CLI / Web → Agent Runtime → LLM + Tool System
-```
+工具执行失败 → 作为 observation 回写，**不**直接崩溃 Agent。
 
 ## 最终架构 / 未来架构
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Web IDE (React)  │  CLI                                  │
-└─────────┬─────────┴──────────┬────────────────────────────┘
-          │                    │
-          ▼                    ▼
-   后端 API (HTTP/WS)      直接调用
-          │
-          ▼
-┌─────────────────────────────────────┐
-│           Agent Runtime (V0.3+)     │
-│  规划 · 循环 · 上下文 · 安全          │
-│  Trace                              │
-└─────────────────┬───────────────────┘
-                  │
-        ┌─────────┼─────────┐
-        ▼         ▼         ▼
-     LLM API   Tool System   （V0.4 编码工具）
+CLI / Web UI
+    ↓
+Agent Runtime（Loop · Planning · Context · Safety · Trace）
+    ↓
+LLM API  +  Tool System（含 V0.4 Coding Tools）
 ```
-
-## 版本职责划分
-
-| 版本 | 做什么 | 不做什么 |
-|------|--------|----------|
-| V0.1 | CLI + LLM + 对话历史 | 工具 |
-| V0.2 | Tool / Registry / Executor / Result | Agent Loop、自动 Tool Calling |
-| V0.3 | Agent Loop：LLM ↔ Tool Call ↔ Observation | 完整 Coding Tools |
-| V0.4 | read/write/search/shell 等编码工具 | — |
 
 ## 配置项
 
-| 变量 | 含义 | 当前默认 |
-|------|------|----------|
-| `LLM_API_KEY` | API 密钥（必填，禁止入库） | — |
-| `LLM_BASE_URL` | OpenAI 兼容接口地址 | `https://api.deepseek.com` |
-| `LLM_MODEL` | 模型名称 | `deepseek-chat` |
+| 变量 | 含义 | 默认 |
+|------|------|------|
+| `LLM_API_KEY` | API 密钥（禁止入库） | — |
+| `LLM_BASE_URL` | OpenAI 兼容地址 | `https://api.deepseek.com` |
+| `LLM_MODEL` | 模型名 | `deepseek-chat` |

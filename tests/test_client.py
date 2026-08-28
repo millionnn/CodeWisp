@@ -74,7 +74,7 @@ def test_chat_success_with_mock() -> None:
 
 
 def test_chat_maps_tool_calls_without_executing() -> None:
-    """预留解析 tool_calls；本阶段不执行工具。"""
+    """解析 tool_calls；Client 本身不执行工具。"""
     mock_openai = MagicMock()
     mock_tc = SimpleNamespace(
         id="call_1",
@@ -100,6 +100,55 @@ def test_chat_maps_tool_calls_without_executing() -> None:
     assert len(response.tool_calls) == 1
     assert response.tool_calls[0].name == "calculator"
     assert response.tool_calls[0].arguments == {"expression": "1+1"}
+    assert response.tool_calls[0].parse_error is None
+
+
+def test_chat_malformed_tool_arguments_sets_parse_error() -> None:
+    mock_openai = MagicMock()
+    mock_tc = SimpleNamespace(
+        id="call_bad",
+        function=SimpleNamespace(name="calculator", arguments="{not-json"),
+    )
+    mock_openai.chat.completions.create.return_value = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=None, tool_calls=[mock_tc]),
+                finish_reason="tool_calls",
+            )
+        ]
+    )
+    client = LLMClient(
+        LLMConfig(api_key="sk", base_url="https://example.com/v1", model="m"),
+        client=mock_openai,
+    )
+    conv = Conversation()
+    conv.add_user("x")
+    response = client.chat(conv)
+    assert response.tool_calls[0].parse_error is not None
+    assert response.tool_calls[0].arguments == {}
+
+
+def test_chat_passes_tools_schema() -> None:
+    mock_openai = MagicMock()
+    mock_openai.chat.completions.create.return_value = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="ok", tool_calls=None),
+                finish_reason="stop",
+            )
+        ]
+    )
+    client = LLMClient(
+        LLMConfig(api_key="sk", base_url="https://example.com/v1", model="m"),
+        client=mock_openai,
+    )
+    conv = Conversation()
+    conv.add_user("hi")
+    tools = [{"type": "function", "function": {"name": "calculator", "parameters": {}}}]
+    client.chat(conv, tools=tools)
+    kwargs = mock_openai.chat.completions.create.call_args.kwargs
+    assert kwargs["tools"] == tools
+    assert kwargs["tool_choice"] == "auto"
 
 
 def test_chat_auth_error() -> None:

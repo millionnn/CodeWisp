@@ -5,10 +5,8 @@
   LLM_BASE_URL  — 可选，默认 DeepSeek 兼容接口
   LLM_MODEL     — 可选，默认 deepseek-chat
 
-本模块是可复用的「LLM 核心」，供 CLI（以及未来的 Web API）调用。
-不得向 stdout 打印，也不得依赖 CLI I/O。
-
-对外返回领域对象 LLMResponse，不向上层传播 SDK 的 choices/message 结构。
+本模块是可复用的「LLM 核心」，供 CLI / AgentLoop 调用。
+只负责 Model I/O，不执行工具。
 """
 
 from __future__ import annotations
@@ -25,7 +23,6 @@ from backend.app.llm.messages import Conversation
 from backend.app.llm.response import LLMResponse, ToolCall
 
 
-# DeepSeek 提供 OpenAI 兼容的 Chat Completions 接口。
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-chat"
 
@@ -64,22 +61,31 @@ class LLMClient:
 
     def __init__(self, config: LLMConfig | None = None, *, client: OpenAI | None = None) -> None:
         self.config = config or LLMConfig.from_env()
-        # client 可注入，便于测试时 mock，无需真实网络。
         self._client = client or OpenAI(
             api_key=self.config.api_key,
             base_url=self.config.base_url,
         )
 
-    def chat(self, conversation: Conversation) -> LLMResponse:
-        """发送完整对话历史，返回领域侧 LLMResponse。"""
+    def chat(
+        self,
+        conversation: Conversation,
+        *,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> LLMResponse:
+        """发送对话历史，可选附带 tools schema；返回 LLMResponse。"""
         if len(conversation) == 0:
             raise ConfigError("对话为空，无法向 LLM 发送请求。")
 
+        request: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": conversation.to_api_messages(),
+        }
+        if tools:
+            request["tools"] = tools
+            request["tool_choice"] = "auto"
+
         try:
-            response = self._client.chat.completions.create(
-                model=self.config.model,
-                messages=conversation.to_api_messages(),  # type: ignore[arg-type]
-            )
+            response = self._client.chat.completions.create(**request)
         except AuthenticationError as exc:
             raise LLMRequestError(
                 "LLM 鉴权失败，请检查 LLM_API_KEY 是否有效。"
@@ -90,14 +96,14 @@ class LLMClient:
             ) from exc
         except APIError as exc:
             raise LLMRequestError(f"LLM API 请求失败：{exc.message}") from exc
-        except Exception as exc:  # noqa: BLE001 — 边界：将未知 SDK 错误映射为领域异常
+        except Exception as exc:  # noqa: BLE001
             raise LLMRequestError(f"LLM 客户端发生未预期错误：{exc}") from exc
 
         return self._to_domain_response(response)
 
     @staticmethod
     def _to_domain_response(response: Any) -> LLMResponse:
-        """将厂商 SDK 响应映射为 LLMResponse（SDK 细节止步于此）。"""
+        """将厂商 SDK 响应映射为 LLMResponse。"""
         try:
             choice = response.choices[0]
             message = choice.message
@@ -107,18 +113,8 @@ class LLMClient:
         except (AttributeError, IndexError, TypeError) as exc:
             raise LLMRequestError("LLM 返回了无法解析的响应结构。") from exc
 
-        tool_calls = tuple(
-            ToolCall(
-                id=str(getattr(tc, "id", "") or ""),
-                name=str(getattr(getattr(tc, "function", None), "name", "") or ""),
-                arguments=_parse_tool_arguments(
-                    getattr(getattr(tc, "function", None), "arguments", None)
-                ),
-            )
-            for tc in raw_tool_calls
-        )
+        tool_calls = tuple(_map_tool_call(tc) for tc in raw_tool_calls)
 
-        # 纯文本模式下仍要求有内容；若未来带 tool_calls，允许 content 为空。
         if (content is None or content == "") and not tool_calls:
             raise LLMRequestError("LLM 返回了空内容。")
 
@@ -130,16 +126,33 @@ class LLMClient:
         )
 
 
-def _parse_tool_arguments(raw: Any) -> dict[str, Any]:
-    """解析 tool call 的 arguments（通常是 JSON 字符串）。"""
+def _map_tool_call(tc: Any) -> ToolCall:
+    function = getattr(tc, "function", None)
+    raw_args = getattr(function, "arguments", None)
+    arguments, arguments_raw, parse_error = _parse_tool_arguments(raw_args)
+    return ToolCall(
+        id=str(getattr(tc, "id", "") or ""),
+        name=str(getattr(function, "name", "") or ""),
+        arguments=arguments,
+        arguments_raw=arguments_raw,
+        parse_error=parse_error,
+    )
+
+
+def _parse_tool_arguments(
+    raw: Any,
+) -> tuple[dict[str, Any], str | None, str | None]:
+    """解析 tool call arguments，返回 (dict, raw_str, parse_error)。"""
     if raw is None or raw == "":
-        return {}
+        return {}, None if raw is None else "", None
     if isinstance(raw, dict):
-        return raw
+        return raw, json.dumps(raw, ensure_ascii=False), None
     if isinstance(raw, str):
         try:
             parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
+        except json.JSONDecodeError as exc:
+            return {}, raw, f"JSON 解析失败：{exc.msg}"
+        if not isinstance(parsed, dict):
+            return {}, raw, "工具参数 JSON 必须是对象。"
+        return parsed, raw, None
+    return {}, str(raw), "不支持的工具参数类型。"

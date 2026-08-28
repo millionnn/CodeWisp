@@ -1,38 +1,28 @@
 """CodeWisp 命令行界面。
 
-职责：仅处理终端输入输出。
-LLM 调用通过 LLMClient 完成，本模块不嵌入 HTTP 逻辑。
+职责：终端输入输出。
+Agent 编排由 AgentLoop 完成，本模块不实现工具循环。
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
-from backend.app.llm.client import LLMClient
+from backend.app.agent.loop import AgentLoop, DEFAULT_AGENT_SYSTEM_PROMPT
+from backend.app.agent.state import AgentStatus
 from backend.app.llm.errors import CodeWispError
 from backend.app.llm.messages import Conversation
-
-DEFAULT_SYSTEM_PROMPT = (
-    "你是 CodeWisp，一名编程助手。"
-    "请清晰、简洁地回答用户问题。"
-    "当前版本仅支持对话，尚不能读写文件或执行命令。"
-)
 
 EXIT_COMMANDS = frozenset({"/exit", "/quit", "exit", "quit"})
 
 
 def print_banner() -> None:
     print("CodeWisp")
-    print("输入问题后回车即可对话。输入 /exit 或 /quit 退出。\n")
+    print("输入任务后回车。Agent 可调用工具完成计算/查时等。输入 /exit 退出。\n")
 
 
 def read_user_input(prompt: str = "> ") -> str | None:
-    """从标准输入读取一行。
-
-    返回：
-        去除首尾空白后的用户文本；空行为空字符串；
-        用户发出 EOF / 中断信号时返回 None（应退出）。
-    """
+    """从标准输入读取一行。"""
     try:
         line = input(prompt)
     except (EOFError, KeyboardInterrupt):
@@ -42,16 +32,14 @@ def read_user_input(prompt: str = "> ") -> str | None:
 
 
 def run_cli(
-    client: LLMClient,
+    agent: AgentLoop,
     *,
-    system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+    system_prompt: str = DEFAULT_AGENT_SYSTEM_PROMPT,
     input_fn: Callable[[str], str | None] = read_user_input,
     output_fn: Callable[[str], None] = print,
+    show_tool_trace: bool = True,
 ) -> int:
-    """交互式多轮对话循环。
-
-    input_fn / output_fn 可注入，便于测试在无真实终端时驱动 CLI。
-    """
+    """交互式多轮任务入口：每次用户输入交给 AgentLoop.run。"""
     print_banner()
 
     conversation = Conversation()
@@ -63,7 +51,6 @@ def run_cli(
             output_fn("再见。")
             return 0
 
-        # 在此统一 strip，保证注入的 input_fn 与真实 stdin 行为一致。
         user_text = user_text.strip()
 
         if user_text == "":
@@ -74,19 +61,30 @@ def run_cli(
             output_fn("再见。")
             return 0
 
-        conversation.add_user(user_text)
-
         try:
-            response = client.chat(conversation)
+            state = agent.run(user_text, conversation=conversation)
         except CodeWispError as exc:
-            # 回滚本轮 user，避免失败请求污染对话历史。
-            conversation.messages.pop()
             output_fn(f"错误：{exc}")
             continue
 
-        # CLI 只消费领域对象的文本；不触碰 SDK 原始结构。
-        text = response.text
-        conversation.add_assistant(text)
-        output_fn(f"CodeWisp:\n{text}\n")
+        if show_tool_trace:
+            for event in state.events:
+                if event.event_type == "tool_completed":
+                    out = (event.metadata or {}).get("output")
+                    output_fn(f"[工具] {event.tool_name} → {out}")
+                elif event.event_type == "tool_failed":
+                    err = (event.metadata or {}).get("error")
+                    output_fn(f"[工具失败] {event.tool_name}：{err}")
+
+        if state.status == AgentStatus.COMPLETED:
+            output_fn(f"CodeWisp:\n{state.final_answer}\n")
+        elif state.status == AgentStatus.MAX_STEPS:
+            output_fn(f"CodeWisp:\n（已达最大步数）{state.error}\n")
+            if state.final_answer:
+                output_fn(state.final_answer)
+        elif state.status == AgentStatus.FAILED:
+            output_fn(f"错误：{state.error}")
+        else:
+            output_fn(f"错误：意外状态 {state.status}")
 
     return 0  # pragma: no cover

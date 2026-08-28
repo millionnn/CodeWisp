@@ -1,10 +1,7 @@
 """LLM 响应领域对象。
 
 将厂商 SDK 的 response.choices[0].message... 关在 LLMClient 内部，
-上层（CLI / 未来 Agent Loop）只依赖本模块的稳定结构。
-
-当前版本以文本对话为主；tool_calls 已预留，供 V0.3 Agent Loop 使用，
-本阶段不会自动执行工具。
+上层（CLI / Agent Loop）只依赖本模块的稳定结构。
 """
 
 from __future__ import annotations
@@ -20,6 +17,10 @@ class ToolCall:
     id: str
     name: str
     arguments: dict[str, Any] = field(default_factory=dict)
+    # 原始 JSON 字符串（若有），便于写回 OpenAI 兼容的 assistant.tool_calls
+    arguments_raw: str | None = None
+    # arguments JSON 解析失败时的错误说明；非空则 Agent 不应调用 Executor
+    parse_error: str | None = None
 
 
 @dataclass(frozen=True)

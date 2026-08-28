@@ -31,7 +31,12 @@ LLM_MODEL=deepseek-chat
 python -m backend.app
 ```
 
-进入交互后输入自然语言问题即可对话；输入 `/exit` 或 `/quit` 退出。
+进入交互后输入自然语言任务；Agent 可自行决定是否调用工具。输入 `/exit` 或 `/quit` 退出。
+
+示例任务：
+
+- `计算 123 * 456`
+- `计算 123 * 456，然后告诉我当前时间`
 
 运行测试（可选）：
 
@@ -43,9 +48,9 @@ pytest
 
 CodeWisp 是从零实现的编程智能体（Coding Agent）：面向自然语言编程任务，目标能力包括探索代码仓库、读写与修改代码、执行本地命令与测试，并根据结果迭代修复。实现上不封装 Claude Code / Codex 等现成产品，也不使用 LangChain、LlamaIndex、OpenAI Agents SDK、Claude Agent SDK、AutoGen、CrewAI 等 Agent 框架；对话历史、工具定义与本地执行、模型输出解析、循环终止与错误处理等关键逻辑自行编写。模型侧使用厂商官方或 OpenAI 兼容 API（当前默认对接 DeepSeek），凭据仅通过环境变量 / 未入库配置提供。
 
-当前已具备：可运行的命令行多轮对话、可复用 LLM 客户端、基础对话历史，以及与 UI/LLM 解耦的本地 Tool System（工具定义、注册表、统一执行器与结构化结果；内置安全计算器与本地时间工具）。Agent 自动调用工具、编码类文件/Shell 工具与 Web IDE 等能力按架构继续演进。
+当前已具备完整的最小 Agent Runtime：接收任务 → 调用 LLM → 识别 Tool Call → 经 ToolExecutor 执行工具 → 将 Observation 写回对话 → 多轮循环 → 在无 tool_calls 或达到最大步数时终止。内置工具目前为安全计算器与本地时间查询；读写文件、Shell 等编码工具尚未加入。
 
-可选：验证工具系统（无需 API Key）：
+可选：单独验证工具系统（无需 API Key）：
 
 ```bash
 python -m backend.app.tools list
