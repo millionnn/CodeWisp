@@ -7,6 +7,7 @@ Agent 编排由 AgentLoop 完成，本模块不实现工具循环。
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from backend.app.agent.loop import AgentLoop, DEFAULT_AGENT_SYSTEM_PROMPT
 from backend.app.agent.state import AgentStatus
@@ -16,9 +17,11 @@ from backend.app.llm.messages import Conversation
 EXIT_COMMANDS = frozenset({"/exit", "/quit", "exit", "quit"})
 
 
-def print_banner() -> None:
+def print_banner(workspace_root: Path | None = None) -> None:
     print("CodeWisp")
-    print("输入任务后回车。Agent 可调用工具完成计算/查时等。输入 /exit 退出。\n")
+    if workspace_root is not None:
+        print(f"目标仓库 (Workspace): {workspace_root}")
+    print("输入任务后回车。Agent 可调用已注册工具。输入 /exit 退出。\n")
 
 
 def read_user_input(prompt: str = "> ") -> str | None:
@@ -34,13 +37,14 @@ def read_user_input(prompt: str = "> ") -> str | None:
 def run_cli(
     agent: AgentLoop,
     *,
+    workspace_root: Path | None = None,
     system_prompt: str = DEFAULT_AGENT_SYSTEM_PROMPT,
     input_fn: Callable[[str], str | None] = read_user_input,
     output_fn: Callable[[str], None] = print,
     show_tool_trace: bool = True,
 ) -> int:
     """交互式多轮任务入口：每次用户输入交给 AgentLoop.run。"""
-    print_banner()
+    print_banner(workspace_root)
 
     conversation = Conversation()
     conversation.add_system(system_prompt)

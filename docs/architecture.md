@@ -16,51 +16,61 @@
 Tool → ToolRegistry → ToolExecutor → ToolResult
 ```
 
-与 UI / LLM 解耦；内置 `calculator`、`get_current_time`。
-
-### V0.3：Agent Loop（当前）
+### V0.3：Agent Loop
 
 ```
-User
-  ↓
+User → AgentLoop → LLM (+ tools schema)
+                 → ToolExecutor → ToolResult → Observation → LLM …
+```
+
+### V0.4-A：Workspace + 只读 Coding Tools（当前）
+
+```
 AgentLoop
   ↓
-LLMClient (+ tools schema) → LLMResponse
+ToolExecutor
   ↓
-有 tool_calls？
-  ├─ 否 → Final Answer → COMPLETED
-  └─ 是 → ToolExecutor → ToolResult
-            ↓
-         Observation 写回 Conversation
-            ↓
-         再次调用 LLM …（直至终止 / max_steps）
+list_files / glob / read_file / search_code
+  ↓
+Workspace（路径边界 + 只读 IO）
 ```
 
 | 模块 | 职责 |
 |------|------|
-| `backend/app/agent/loop.py` | Agent 编排：LLM ↔ Tool ↔ Observation |
-| `backend/app/agent/state.py` | `AgentState` / `AgentStatus` |
-| `backend/app/agent/events.py` | 轻量事件（无 Event Bus，供未来 Trace） |
-| `backend/app/llm/` | Conversation（含 tool）、LLMClient、LLMResponse |
-| `backend/app/tools/` | Tool System（V0.2） |
-| `backend/app/cli/` | 仅 UI：输入任务、展示结果与工具轨迹 |
+| `backend/app/workspace/` | `Workspace`：路径边界 + list/glob/read/search |
+| `backend/app/tools/builtin/workspace/` | 与 Workspace 对齐的一工具一文件（list_files / glob / read_file / search_code） |
+| `backend/app/agent/` | AgentLoop（无工具特判） |
+| `backend/app/tools/` | Tool System |
+| `backend/app/cli/` | UI |
 
-**边界：**
+**工具目录规划（与能力分类对齐）：**
 
-- LLMClient **只**做 Model I/O，不执行工具
-- ToolExecutor **不知道** LLM
-- CLI **不**实现 while tool_calls
-- Coding Tools（读文件 / Shell 等）属于 **V0.4**
+```text
+backend/app/tools/builtin/
+├── workspace/       # 已实现：list_files, glob, read_file, search_code
+│                    # 预留：edit_file, write_file, patch
+├── execution/       # 预留：run_command, git
+└── intelligence/    # 预留：LSP, ...
+```
+
+**路径边界：** `Path.resolve()` + `relative_to(workspace_root)`，拒绝 `..` 穿越与 workspace 外绝对路径。
+
+**Workspace 语义（重要）：**
+
+- `Workspace` = Agent **服务的目标仓库**（用户打开的项目），不是 CodeWisp 源码树。
+- 根目录解析挂点：`resolve_workspace_root()`  
+  优先级：显式参数（CLI `--workspace` / 未来 Web Session）→ 环境变量 `CODEWISP_WORKSPACE` → `cwd`。
+- 未来 Web UI：每个 Session 绑定自己的 `workspace_root`，注入 `Workspace`，无需改 AgentLoop。
+
+**本阶段明确未实现（V0.4-B/C）：** `edit_file` / `write_file` / `run_command` / patch / git。
 
 ## 终止条件
 
 | 状态 | 含义 |
 |------|------|
-| `COMPLETED` | 模型未再返回 tool_calls，产出最终回答 |
-| `MAX_STEPS` | 达到 `max_steps`（默认 10） |
-| `FAILED` | 不可恢复错误（如 LLM 请求失败） |
-
-工具执行失败 → 作为 observation 回写，**不**直接崩溃 Agent。
+| `COMPLETED` | 无 tool_calls，产出最终回答 |
+| `MAX_STEPS` | 达到 `max_steps` |
+| `FAILED` | 不可恢复错误 |
 
 ## 最终架构 / 未来架构
 
@@ -69,7 +79,7 @@ CLI / Web UI
     ↓
 Agent Runtime（Loop · Planning · Context · Safety · Trace）
     ↓
-LLM API  +  Tool System（含 V0.4 Coding Tools）
+LLM API  +  Tool System（只读已落地；写入/Shell 后续）
 ```
 
 ## 配置项

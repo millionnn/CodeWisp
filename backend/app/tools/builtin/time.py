@@ -18,7 +18,10 @@ class GetCurrentTimeTool(Tool):
 
     @property
     def description(self) -> str:
-        return "返回本机当前日期时间（ISO 8601 格式），不依赖外部网络。"
+        return (
+            "返回本机当前日期时间（ISO 8601、时区、unix 时间戳），不依赖外部网络。"
+            "当用户询问现在几点、今天日期或当前时间时调用。"
+        )
 
     @property
     def parameters(self) -> dict[str, Any]:

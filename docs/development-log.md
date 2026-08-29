@@ -1,5 +1,40 @@
 # 开发日志
 
+## V0.4-A
+
+**日期：** 2026-08-29
+
+### 目标
+
+引入 Workspace 与只读 Coding Tools，让 Agent 第一次能理解真实代码仓库。
+
+### 已完成
+
+- `Workspace`：`root` / `resolve_path` / `list` / `glob` / `read` / `search`
+- 工具：`list_files`、`glob`、`read_file`、`search_code`（构造函数注入 Workspace）
+- 路径边界：`resolve()` + `relative_to`，拒绝穿越
+- 注册进默认 Registry；AgentLoop 无特判
+- 临时目录单测 + Agent 集成测试（glob → read_file → final answer）
+
+### 设计决策
+
+1. **Coding Tools 不各自做路径逻辑** — 统一走 Workspace，避免边界漏洞不一致。
+2. **不默认整库递归 list** — `max_depth` 默认 1，降低噪声与成本。
+3. **glob 与 search_code 分离** — 找文件 vs 找内容。
+4. **不做写入/Shell** — 严格停在 V0.4-A。
+6. **System prompt 与工具解耦** — Agent 只保留角色与全局约束；具体何时用哪个工具写在各 Tool 的 description / schema 中，由 `list_schemas()` 交给模型。
+7. **Workspace = 目标仓库** — 通过 `resolve_workspace_root()` 挂点解析（`--workspace` / `CODEWISP_WORKSPACE` / cwd），与 CodeWisp 源码目录解耦，便于日后 Web Session 注入。
+
+### 测试结果
+
+`pytest`：**100 passed**（含 V0.1–V0.3 回归 + V0.4-A）。
+
+### 后续（需确认后再做）
+
+**V0.4-B**：写入类工具（edit/write/patch 等）。
+
+---
+
 ## V0.3
 
 **日期：** 2026-08-28

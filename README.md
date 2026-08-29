@@ -28,15 +28,29 @@ LLM_MODEL=deepseek-chat
 启动：
 
 ```bash
+# 默认：以当前工作目录为「目标仓库」(Workspace)
+cd /path/to/your-project
+python -m backend.app
+
+# 或显式指定目标仓库（推荐，语义最清晰）
+python -m backend.app --workspace /path/to/your-project
+```
+
+也可用环境变量（写入 `.env` 亦可）：
+
+```bash
+export CODEWISP_WORKSPACE=/path/to/your-project
 python -m backend.app
 ```
 
-进入交互后输入自然语言任务；Agent 可自行决定是否调用工具。输入 `/exit` 或 `/quit` 退出。
+优先级：`--workspace` > `CODEWISP_WORKSPACE` > `cwd`。  
+注意：Workspace 是 Agent 要探索的项目目录，不是 CodeWisp 安装路径。在本仓库根目录启动时，相当于用 CodeWisp 自己当目标项目做自测。
 
 示例任务：
 
 - `计算 123 * 456`
 - `计算 123 * 456，然后告诉我当前时间`
+- `查看项目结构，找到 AgentLoop 相关代码并简要说明`
 
 运行测试（可选）：
 
@@ -48,13 +62,14 @@ pytest
 
 CodeWisp 是从零实现的编程智能体（Coding Agent）：面向自然语言编程任务，目标能力包括探索代码仓库、读写与修改代码、执行本地命令与测试，并根据结果迭代修复。实现上不封装 Claude Code / Codex 等现成产品，也不使用 LangChain、LlamaIndex、OpenAI Agents SDK、Claude Agent SDK、AutoGen、CrewAI 等 Agent 框架；对话历史、工具定义与本地执行、模型输出解析、循环终止与错误处理等关键逻辑自行编写。模型侧使用厂商官方或 OpenAI 兼容 API（当前默认对接 DeepSeek），凭据仅通过环境变量 / 未入库配置提供。
 
-当前已具备完整的最小 Agent Runtime：接收任务 → 调用 LLM → 识别 Tool Call → 经 ToolExecutor 执行工具 → 将 Observation 写回对话 → 多轮循环 → 在无 tool_calls 或达到最大步数时终止。内置工具目前为安全计算器与本地时间查询；读写文件、Shell 等编码工具尚未加入。
+当前已具备最小 Agent Runtime，以及面向仓库的**只读**探索能力：`list_files` / `glob` / `read_file` / `search_code`（经 Workspace 路径边界保护）。Agent 可自主列出结构、按模式找文件、搜索并阅读代码；**尚不能**修改文件或执行 Shell。
 
 可选：单独验证工具系统（无需 API Key）：
 
 ```bash
 python -m backend.app.tools list
-python -m backend.app.tools run calculator '{"expression":"12 * 8 + 5"}'
+python -m backend.app.tools run list_files '{"path":".","max_depth":1}'
+python -m backend.app.tools run glob '{"pattern":"**/loop.py"}'
 ```
 
 ## 其它说明

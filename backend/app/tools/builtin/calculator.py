@@ -85,7 +85,11 @@ class CalculatorTool(Tool):
 
     @property
     def description(self) -> str:
-        return "安全计算简单数学表达式，支持加减乘除、整除、取模与幂运算。"
+        return (
+            "安全计算简单数学表达式（加减乘除、整除、取模、幂运算）。"
+            "当用户需要数值计算结果时调用；不要心算复杂表达式。"
+            "参数 expression 为数学表达式字符串，例如 '12 * 8 + 5'。"
+        )
 
     @property
     def parameters(self) -> dict[str, Any]:

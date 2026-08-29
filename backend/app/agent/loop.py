@@ -23,10 +23,10 @@ from backend.app.tools.result import ToolResult
 DEFAULT_MAX_STEPS = 10
 
 DEFAULT_AGENT_SYSTEM_PROMPT = (
-    "你是 CodeWisp，一名可使用工具的编程助手。"
-    "需要计算或查询当前时间时，请调用提供的工具；"
-    "拿到工具结果后再用简洁中文回答用户。"
-    "当前版本尚不能读写文件或执行 Shell。"
+    "你是 CodeWisp，一名编程助手。"
+    "请根据当前提供的 tools 完成用户任务："
+    "需要外部信息或仓库操作时调用相应工具，并依据工具返回的结果作答；"
+    "不要声称使用了未提供的能力，也不要虚构未实际调用的工具结果。"
 )
 
 
@@ -85,7 +85,9 @@ class AgentLoop:
         try:
             for step in range(1, self.max_steps + 1):
                 state.step = step
+                # 调用 LLM 模型
                 response = self._call_llm(state, conv, tools)
+                # 发送 LLM 调用事件
                 self._emit(
                     state,
                     "llm_called",
@@ -95,7 +97,7 @@ class AgentLoop:
                         "finish_reason": response.finish_reason,
                     },
                 )
-
+                # 没有 tool_calls：直接返回答案
                 if not response.has_tool_calls:
                     answer = response.text
                     conv.add_assistant(answer)
@@ -109,7 +111,7 @@ class AgentLoop:
                     )
                     return state
 
-                # 有 tool_calls：写入 assistant 消息，再逐个执行
+                # 有 tool_calls：写入 assistant 消息，再逐个执行工具
                 state.last_tool_calls = response.tool_calls
                 conv.add_assistant_tool_calls(response.content, response.tool_calls)
 
@@ -147,6 +149,7 @@ class AgentLoop:
             )
             return state
 
+    # 调用 LLM 模型
     def _call_llm(
         self,
         state: AgentState,
@@ -155,6 +158,7 @@ class AgentLoop:
     ) -> LLMResponse:
         return self.llm.chat(conversation, tools=tools)
 
+    # 执行工具
     def _handle_tool_call(
         self,
         state: AgentState,
@@ -174,6 +178,7 @@ class AgentLoop:
             },
         )
 
+        # 工具参数非法：返回错误结果
         if tool_call.parse_error:
             result = ToolResult(
                 success=False,
@@ -181,6 +186,7 @@ class AgentLoop:
                 error=f"工具参数非法：{tool_call.parse_error}",
                 metadata={"tool_name": tool_call.name, "tool_call_id": tool_call.id},
             )
+        # 工具名称为空：返回错误结果
         elif not (tool_call.name or "").strip():
             result = ToolResult(
                 success=False,
@@ -188,10 +194,12 @@ class AgentLoop:
                 error="工具名称为空。",
                 metadata={"tool_call_id": tool_call.id},
             )
+        # 工具名称和参数合法：执行工具
         else:
             result = self.executor.execute(tool_call.name, tool_call.arguments)
 
         event_type = "tool_completed" if result.success else "tool_failed"
+        # 发送工具执行事件
         self._emit(
             state,
             event_type,
@@ -209,6 +217,7 @@ class AgentLoop:
         """将 ToolResult 转为模型可读的 observation 文本。"""
         return json.dumps(result.to_dict(), ensure_ascii=False)
 
+    # 发送事件，用于记录 Agent 执行过程中的关键事件
     @staticmethod
     def _emit(
         state: AgentState,
