@@ -1,5 +1,40 @@
 # 开发日志
 
+## V0.4-B
+
+**日期：** 2026-08-29
+
+### 目标
+
+Safe Code Modification：让 Agent 能在 Workspace 内**精确、安全、可验证**地修改代码。
+
+### 已完成
+
+- `Workspace.write_text` / `replace_text`：共享原子写入（临时文件 + `os.replace`）
+- 工具：`edit_file`（`path` / `old_text` / `new_text` / `expected_replacements`）、`write_file`（`path` / `content` / `overwrite`，默认 false）
+- 确定性编辑：匹配次数必须等于预期，否则结构化失败、不落盘
+- 缺失父目录：写入时自动创建（边界仍经 `resolve_path`）
+- 注册进默认 Registry；AgentLoop 无工具特判
+- 测试：Workspace 写入、Tool、Agent 集成（read → edit → read 验证；write → read）
+
+### 设计决策
+
+1. **禁止整文件重生成作为默认编辑** — `edit_file` 只做精确子串替换。
+2. **不猜测** — `actual != expected_replacements` 一律失败。
+3. **写入统一走 Workspace** — Tool 不直接 `open()`。
+4. **默认不覆盖** — `write_file` 的 `overwrite=false`，降低误删风险。
+5. **不做 Shell / git / self-correction** — 严格停在 V0.4-B。
+
+### 测试结果
+
+`pytest`：**137 passed**（含 V0.1–V0.4-A 回归 + V0.4-B）。
+
+### 后续（需确认后再做）
+
+**V0.4-C**：受控命令执行（如 `run_command`），仍须路径/权限边界。
+
+---
+
 ## V0.4-A
 
 **日期：** 2026-08-29
@@ -27,11 +62,11 @@
 
 ### 测试结果
 
-`pytest`：**100 passed**（含 V0.1–V0.3 回归 + V0.4-A）。
+`pytest`：**105 passed**（含 V0.1–V0.3 回归 + V0.4-A）。
 
 ### 后续（需确认后再做）
 
-**V0.4-B**：写入类工具（edit/write/patch 等）。
+**V0.4-B**：写入类工具（edit/write 等）——已在上方完成。
 
 ---
 

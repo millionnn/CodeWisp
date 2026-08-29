@@ -77,7 +77,16 @@ def test_path_traversal_via_tool(executor: ToolExecutor) -> None:
 
 def test_registry_exposes_coding_schemas(workspace: Workspace) -> None:
     names = {t.name for t in create_default_registry(workspace=workspace).list_tools()}
-    assert {"list_files", "glob", "read_file", "search_code", "calculator", "get_current_time"} <= names
+    assert {
+        "list_files",
+        "glob",
+        "read_file",
+        "search_code",
+        "edit_file",
+        "write_file",
+        "calculator",
+        "get_current_time",
+    } <= names
 
 
 def test_tools_use_injected_workspace(tmp_path: Path) -> None:

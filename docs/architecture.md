@@ -23,7 +23,7 @@ User → AgentLoop → LLM (+ tools schema)
                  → ToolExecutor → ToolResult → Observation → LLM …
 ```
 
-### V0.4-A：Workspace + 只读 Coding Tools（当前）
+### V0.4-A：Workspace + 只读 Coding Tools
 
 ```
 AgentLoop
@@ -35,10 +35,24 @@ list_files / glob / read_file / search_code
 Workspace（路径边界 + 只读 IO）
 ```
 
+### V0.4-B：Safe Code Modification（当前）
+
+```
+AgentLoop
+  ↓
+ToolExecutor
+  ↓
+edit_file / write_file
+  ↓
+Workspace.replace_text / write_text
+  ↓
+resolve_path + atomic write
+```
+
 | 模块 | 职责 |
 |------|------|
-| `backend/app/workspace/` | `Workspace`：路径边界 + list/glob/read/search |
-| `backend/app/tools/builtin/workspace/` | 与 Workspace 对齐的一工具一文件（list_files / glob / read_file / search_code） |
+| `backend/app/workspace/` | `Workspace`：路径边界 + list/glob/read/search + write_text/replace_text |
+| `backend/app/tools/builtin/workspace/` | 一工具一文件：只读四工具 + `edit_file` / `write_file` |
 | `backend/app/agent/` | AgentLoop（无工具特判） |
 | `backend/app/tools/` | Tool System |
 | `backend/app/cli/` | UI |
@@ -47,13 +61,19 @@ Workspace（路径边界 + 只读 IO）
 
 ```text
 backend/app/tools/builtin/
-├── workspace/       # 已实现：list_files, glob, read_file, search_code
-│                    # 预留：edit_file, write_file, patch
-├── execution/       # 预留：run_command, git
+├── workspace/       # 已实现：list/glob/read/search + edit_file/write_file
+│                    # 预留：patch（若需要更细粒度补丁）
+├── execution/       # 预留：run_command, git（V0.4-C）
 └── intelligence/    # 预留：LSP, ...
 ```
 
-**路径边界：** `Path.resolve()` + `relative_to(workspace_root)`，拒绝 `..` 穿越与 workspace 外绝对路径。
+**路径边界：** `Path.resolve()` + `relative_to(workspace_root)`，拒绝 `..` 穿越与 workspace 外绝对路径；写入同样复用，禁止 Tool 直接 `open()`。
+
+**确定性编辑（edit_file）：** `old_text` 精确计数；仅当 `actual == expected_replacements` 时替换并原子写回；否则结构化失败，不猜测。
+
+**原子写入：** 同目录临时文件 → `os.replace`，避免半截截断。
+
+**write_file：** 默认 `overwrite=false`；缺失父目录时自动创建（仍受边界约束）。
 
 **Workspace 语义（重要）：**
 
@@ -62,7 +82,7 @@ backend/app/tools/builtin/
   优先级：显式参数（CLI `--workspace` / 未来 Web Session）→ 环境变量 `CODEWISP_WORKSPACE` → `cwd`。
 - 未来 Web UI：每个 Session 绑定自己的 `workspace_root`，注入 `Workspace`，无需改 AgentLoop。
 
-**本阶段明确未实现（V0.4-B/C）：** `edit_file` / `write_file` / `run_command` / patch / git。
+**本阶段明确未实现（V0.4-C 及以后）：** `run_command` / shell / git / patch / LSP / self-correction。
 
 ## 终止条件
 
@@ -79,7 +99,7 @@ CLI / Web UI
     ↓
 Agent Runtime（Loop · Planning · Context · Safety · Trace）
     ↓
-LLM API  +  Tool System（只读已落地；写入/Shell 后续）
+LLM API  +  Tool System（只读 + 安全写入已落地；Shell / git 后续）
 ```
 
 ## 配置项
