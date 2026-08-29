@@ -83,7 +83,13 @@ def run_cli(
         if state.status == AgentStatus.COMPLETED:
             output_fn(f"CodeWisp:\n{state.final_answer}\n")
         elif state.status == AgentStatus.MAX_STEPS:
-            output_fn(f"CodeWisp:\n（已达最大步数）{state.error}\n")
+            output_fn(f"CodeWisp:\n（已达最大步数 / 迭代预算耗尽）{state.error}\n")
+            if state.final_answer:
+                output_fn(state.final_answer)
+        elif state.status == AgentStatus.PERMISSION_REQUIRED:
+            output_fn(
+                f"CodeWisp:\n（需要用户授权，已停止自动继续）{state.error}\n"
+            )
             if state.final_answer:
                 output_fn(state.final_answer)
         elif state.status == AgentStatus.FAILED:

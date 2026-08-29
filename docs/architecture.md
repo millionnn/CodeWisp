@@ -23,78 +23,85 @@ User → AgentLoop → LLM (+ tools schema)
                  → ToolExecutor → ToolResult → Observation → LLM …
 ```
 
-### V0.4-A：Workspace + 只读 Coding Tools
+### V0.4-A / V0.4-B：Workspace 只读 + 安全写入
 
 ```
-AgentLoop → ToolExecutor → list/glob/read/search → Workspace
+list/glob/read/search / edit_file/write_file → Workspace
 ```
 
-### V0.4-B：Safe Code Modification
-
-```
-AgentLoop → ToolExecutor → edit_file / write_file → Workspace
-```
-
-### V0.4-C：Controlled Command Execution（当前）
+### V0.4-C：Controlled Command Execution
 
 ```text
-                    AgentLoop
-                        │
-                        ▼
-                   ToolExecutor
-                        │
-                        ▼
-                  run_command
-                        │
-                        ▼
-                ExecutionService
-                        │
-                 CommandPolicy
-                 /      |      \
-              ALLOW    ASK     DENY
-                │        │       │
-                ▼        │       ▼
-             execute     │     reject
-                         ▼
-                PermissionRequired
-                     （不执行）
+run_command → CommandPolicy (ALLOW|ASK|DENY) → ExecutionService → ExecutionResult
 ```
+
+### V0.5：Self-Correction / Bounded Autonomous Repair（当前）
+
+Self-Correction **不是**独立的 Python 修复器，而是现有 Agent Loop 基于 Observation 的有限自主迭代：
+
+```text
+                 ┌─────────────────────┐
+                 │      AgentLoop      │
+                 └──────────┬──────────┘
+                            │
+                            ▼
+                          LLM
+                            │
+                     Tool Call
+                            │
+                            ▼
+                         Tool
+                            │
+                            ▼
+                      Observation
+                            │
+                            └─────────────┐
+                                          │
+                                          ▼
+                                         LLM
+                                          │
+                               ┌──────────┴──────────┐
+                               │                     │
+                            Continue               Finish
+                               │
+                               ▼
+                         Another Tool
+```
+
+框架提供：
+
+- 工具与 Observation 回写
+- 迭代预算（`max_steps`，默认 15）
+- `termination_reason`：`completed` / `max_steps` / `permission_required` / `failed`
+- `PERMISSION_REQUIRED`：ASK 时硬停，绝不自动 ALLOW
+
+框架**不**提供：写死的「pytest 失败 → edit_file」策略。
 
 | 模块 | 职责 |
 |------|------|
-| `backend/app/execution/` | Request / Result / Policy / Service（语言无关） |
-| `backend/app/tools/builtin/execution/` | 薄 `run_command` Tool |
-| `backend/app/workspace/` | 路径边界；执行 cwd 复用 `resolve_path` |
-| `backend/app/agent/` | AgentLoop（无工具 / 语言特判） |
-| `backend/app/tools/` | Tool System |
+| `backend/app/agent/` | AgentLoop / State / Event（工具无关） |
+| `backend/app/workspace/` | 路径边界与读写 |
+| `backend/app/execution/` | 语言无关命令执行 + Policy |
+| `backend/app/tools/` | Tool System + Coding / Execution 工具 |
 
 **工具目录：**
 
 ```text
 backend/app/tools/builtin/
 ├── workspace/       # list/glob/read/search + edit/write
-├── execution/       # run_command（V0.4-C）
+├── execution/       # run_command
 └── intelligence/    # 预留：LSP, ...
 ```
 
-**Execution 安全机制：**
-
-- `shell=False`；`command` + `args` 列表，禁止 shell 拼接
-- `cwd` 必须落在 Workspace 内
-- 强制 timeout（默认 30s，上限 120s）
-- stdout/stderr 截断（`max_output_chars`）
-- Policy：`ALLOW` / `ASK` / `DENY`；ASK 返回 `permission_required`，不启动进程
-
-**ExecutionService 与具体语言无关**——`pytest` / `mvn` / `cargo` 走同一套 Request → Policy → Service。
-
-**本阶段明确未实现：** Self-Correction、Planning、Project Detection、LSP、Web UI、交互式 Permission、开放任意 Shell。
+**本阶段明确未实现：** Planning、Project Detection、LSP、Web UI、交互式 Permission、Context Compression。
 
 ## 终止条件
 
 | 状态 | 含义 |
 |------|------|
 | `COMPLETED` | 无 tool_calls，产出最终回答 |
-| `MAX_STEPS` | 达到 `max_steps` |
+| `MAX_STEPS` | 迭代预算耗尽 |
+| `PERMISSION_REQUIRED` | 工具返回 ASK / permission_required，硬停 |
 | `FAILED` | 不可恢复错误 |
 
 ## 最终架构 / 未来架构
@@ -104,14 +111,15 @@ CLI / Web UI
     ↓
 Agent Runtime（Loop · Planning · Context · Safety · Trace）
     ↓
-LLM API  +  Tool System（只读 + 写入 + 受控执行已落地）
+LLM API  +  Tool System（只读 + 写入 + 受控执行 + 有限 Self-Correction）
 ```
 
 ## 配置项
 
-| 变量 | 含义 | 默认 |
+| 变量 / 参数 | 含义 | 默认 |
 |------|------|------|
 | `LLM_API_KEY` | API 密钥（禁止入库） | — |
 | `LLM_BASE_URL` | OpenAI 兼容地址 | `https://api.deepseek.com` |
 | `LLM_MODEL` | 模型名 | `deepseek-chat` |
-| `CODEWISP_WORKSPACE` | 目标仓库根（可被 `--workspace` 覆盖） | cwd |
+| `CODEWISP_WORKSPACE` | 目标仓库根 | cwd |
+| `--max-steps` | 迭代预算 | AgentLoop 默认 15 |

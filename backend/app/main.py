@@ -44,6 +44,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
             "省略时：CODEWISP_WORKSPACE → cwd。"
         ),
     )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Agent 迭代预算（每次 LLM 调用计 1 步）。省略时使用默认值。",
+    )
     return parser.parse_args(argv)
 
 
@@ -58,7 +64,10 @@ def main(argv: list[str] | None = None) -> int:
         client = LLMClient(config)
         registry = create_default_registry(workspace_root=workspace_root)
         executor = ToolExecutor(registry)
-        agent = AgentLoop(client, executor, registry)
+        loop_kwargs: dict = {}
+        if args.max_steps is not None:
+            loop_kwargs["max_steps"] = args.max_steps
+        agent = AgentLoop(client, executor, registry, **loop_kwargs)
     except ConfigError as exc:
         print(f"配置错误：{exc}", file=sys.stderr)
         return 1

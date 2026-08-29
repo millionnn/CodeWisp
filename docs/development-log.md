@@ -1,5 +1,39 @@
 # 开发日志
 
+## V0.5
+
+**日期：** 2026-08-30
+
+### 目标
+
+Self-Correction / Autonomous Repair：在有限预算内，让 Agent 依据 Observation 自主决定继续工具调用或结束，完成「发现 → 定位 → 修改 → 验证」闭环。
+
+### 已完成
+
+- 复用既有多轮 AgentLoop（不重写、无语言特判）
+- `termination_reason`；`PERMISSION_REQUIRED` 硬停（不自动授权）
+- 默认 `max_steps=15`；CLI `--max-steps`
+- System prompt：Observation 驱动迭代 / 验证后停止 / 遇授权则停（不写死工具顺序）
+- 集成测试：简单修复、需 search、多轮修复、预算耗尽、修复中 ASK
+- 文档更新
+
+### 设计决策
+
+1. **Self-Correction = Loop 的自然能力** — 不是独立 Repair Engine。
+2. **预算复用 max_steps** — 不另造 repair_iteration 计数器。
+3. **ASK 框架硬停** — 安全优先于「让模型自己停」。
+4. **无 pytest 专用解析器 / if exit_code 重试** — 保持语言无关。
+
+### 测试结果
+
+`pytest`：**192 passed**（含 V0.1–V0.4-C 回归 + V0.5）。
+
+### 后续（需确认后再做）
+
+Planning / 项目探测 / Context Compression / 交互式 Permission UI 等。
+
+---
+
 ## V0.4-C
 
 **日期：** 2026-08-30
@@ -15,7 +49,7 @@ Language-Agnostic Controlled Command Execution：在 Workspace 内安全、受�
 - ALLOW / ASK / DENY；ASK 不启动 subprocess
 - 安全：`shell=False`、cwd 边界、timeout、输出截断
 - Agent 集成测试；文档更新
-- **未做** Self-Correction / 交互式 Permission UI / 项目语言探测
+- **未做** Self-Correction / 交互式 Permission UI / 项目语言探测（已移交 V0.5）
 
 ### 设计决策
 
@@ -30,7 +64,7 @@ Language-Agnostic Controlled Command Execution：在 Workspace 内安全、受�
 
 ### 后续（需确认后再做）
 
-**V0.5 Self-Correction**：基于执行失败 Observation 的修改与再验证循环（仍非本版本）。
+**V0.5 Self-Correction** —— 已在上方完成。
 
 ---
 

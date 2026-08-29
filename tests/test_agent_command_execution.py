@@ -116,8 +116,9 @@ def test_agent_permission_required_no_execute(tmp_path: Path) -> None:
                 ),
                 finish_reason="tool_calls",
             ),
+            # 若框架未硬停，模型还会再答一轮；有硬停则不应被消费
             LLMResponse(
-                content="该命令需要用户授权（permission_required），本次未执行。",
+                content="不应当到这里",
                 finish_reason="stop",
             ),
         ]
@@ -125,12 +126,13 @@ def test_agent_permission_required_no_execute(tmp_path: Path) -> None:
     agent = AgentLoop(llm, ToolExecutor(registry), registry)
     state = agent.run("请 git push")
 
-    assert state.status == AgentStatus.COMPLETED
+    assert state.status == AgentStatus.PERMISSION_REQUIRED
+    assert state.termination_reason == "permission_required"
     assert spy.calls == []
+    assert len(llm.calls) == 1  # 硬停后不再调用 LLM
     failed = [e for e in state.events if e.event_type == "tool_failed"]
     assert len(failed) == 1
     meta = failed[0].metadata
-    # ToolExecutor 把 ToolResult.to_dict() 放进 event metadata
     assert meta.get("output", {}).get("permission_required") is True or meta.get(
         "metadata", {}
     ).get("permission_required") is True

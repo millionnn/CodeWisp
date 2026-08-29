@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -81,6 +82,7 @@ def test_final_answer_without_tool_call() -> None:
     loop, llm = _agent([LLMResponse(content="你好", finish_reason="stop")])
     state = loop.run("打个招呼")
     assert state.status == AgentStatus.COMPLETED
+    assert state.termination_reason == "completed"
     assert state.final_answer == "你好"
     assert state.step == 1
     assert llm.calls[0]["tools"]  # schema 已传给模型
@@ -277,6 +279,7 @@ def test_max_steps() -> None:
     loop, _ = _agent([forever, forever, forever], max_steps=2)
     state = loop.run("无限工具")
     assert state.status == AgentStatus.MAX_STEPS
+    assert state.termination_reason == "max_steps"
     assert state.step == 2
     assert "最大步数" in (state.error or "")
 
@@ -285,6 +288,36 @@ def test_empty_task_failed() -> None:
     loop, _ = _agent([])
     state = loop.run("   ")
     assert state.status == AgentStatus.FAILED
+    assert state.termination_reason == "failed"
+
+
+def test_permission_required_hard_stops_loop(tmp_path: Path) -> None:
+    """ASK / permission_required：写入 observation 后硬停，不再调用 LLM。"""
+    from backend.app.workspace.workspace import Workspace
+
+    registry = create_default_registry(workspace=Workspace(tmp_path))
+    llm = ScriptedLLMClient(
+        [
+            LLMResponse(
+                content=None,
+                tool_calls=(
+                    ToolCall(
+                        id="p1",
+                        name="run_command",
+                        arguments={"command": "npm", "args": ["install"]},
+                        arguments_raw="{}",
+                    ),
+                ),
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(content="不应执行", finish_reason="stop"),
+        ]
+    )
+    loop = AgentLoop(llm, ToolExecutor(registry), registry, max_steps=5)
+    state = loop.run("安装依赖")
+    assert state.status == AgentStatus.PERMISSION_REQUIRED
+    assert state.termination_reason == "permission_required"
+    assert len(llm.calls) == 1
 
 
 def test_initial_status_idle_on_fresh_state_object() -> None:

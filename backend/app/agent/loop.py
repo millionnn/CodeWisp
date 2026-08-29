@@ -2,6 +2,9 @@
 
 职责：编排（orchestration）。
 不负责：HTTP、CLI 展示、具体 Tool 实现、厂商 SDK 细节。
+
+V0.5：在现有多轮 Tool Calling 上增加有限预算语义、termination_reason、
+以及 permission_required 硬停——不写死任何语言/测试修复策略。
 """
 
 from __future__ import annotations
@@ -20,13 +23,19 @@ from backend.app.tools.executor import ToolExecutor
 from backend.app.tools.registry import ToolRegistry
 from backend.app.tools.result import ToolResult
 
-DEFAULT_MAX_STEPS = 10
+# 迭代预算：每次 LLM 调用计 1 step（含修复闭环所需的多轮工具）
+DEFAULT_MAX_STEPS = 15
 
 DEFAULT_AGENT_SYSTEM_PROMPT = (
     "你是 CodeWisp，一名编程助手。"
     "请根据当前提供的 tools 完成用户任务："
-    "需要外部信息或仓库操作时调用相应工具，并依据工具返回的结果作答；"
+    "需要外部信息或仓库操作时调用相应工具，并依据工具返回的结果（Observation）决定下一步——"
+    "可以继续调用工具，或在任务已完成后给出最终回答。"
+    "若你修改了代码或配置，应通过合适的检查或命令验证结果；验证已通过则停止，不要无意义地重复同一操作。"
+    "若工具返回需要用户授权（permission_required），请停止自动继续操作并说明原因，"
+    "不要尝试绕过权限策略或未授权执行。"
     "不要声称使用了未提供的能力，也不要虚构未实际调用的工具结果。"
+    "可用步数有限，请高效完成任务。"
 )
 
 
@@ -64,6 +73,7 @@ class AgentLoop:
                 max_steps=self.max_steps,
                 conversation=conversation or Conversation(),
                 error="任务内容不能为空。",
+                termination_reason="failed",
             )
             return state
 
@@ -85,9 +95,7 @@ class AgentLoop:
         try:
             for step in range(1, self.max_steps + 1):
                 state.step = step
-                # 调用 LLM 模型
                 response = self._call_llm(state, conv, tools)
-                # 发送 LLM 调用事件
                 self._emit(
                     state,
                     "llm_called",
@@ -97,59 +105,97 @@ class AgentLoop:
                         "finish_reason": response.finish_reason,
                     },
                 )
-                # 没有 tool_calls：直接返回答案
+
                 if not response.has_tool_calls:
                     answer = response.text
                     conv.add_assistant(answer)
                     state.final_answer = answer
                     state.status = AgentStatus.COMPLETED
+                    state.termination_reason = "completed"
                     self._emit(
                         state,
                         "agent_completed",
                         step,
-                        metadata={"final_answer": answer},
+                        metadata={
+                            "final_answer": answer,
+                            "termination_reason": state.termination_reason,
+                            "status": state.status.value,
+                        },
                     )
                     return state
 
-                # 有 tool_calls：写入 assistant 消息，再逐个执行工具
                 state.last_tool_calls = response.tool_calls
                 conv.add_assistant_tool_calls(response.content, response.tool_calls)
 
                 for tool_call in response.tool_calls:
-                    self._handle_tool_call(state, conv, tool_call, step)
+                    result = self._handle_tool_call(state, conv, tool_call, step)
+                    if _is_permission_required(result):
+                        state.status = AgentStatus.PERMISSION_REQUIRED
+                        state.termination_reason = "permission_required"
+                        state.error = (
+                            result.error
+                            or "工具返回 permission_required，已停止自动继续。"
+                        )
+                        self._emit(
+                            state,
+                            "agent_completed",
+                            step,
+                            metadata={
+                                "status": state.status.value,
+                                "termination_reason": state.termination_reason,
+                                "error": state.error,
+                                "tool_name": tool_call.name,
+                            },
+                        )
+                        return state
 
             state.status = AgentStatus.MAX_STEPS
-            state.error = f"已达到最大步数 {self.max_steps}，Agent 停止。"
+            state.termination_reason = "max_steps"
+            state.error = (
+                f"已达到最大步数 {self.max_steps}（迭代预算耗尽），Agent 停止。"
+            )
             self._emit(
                 state,
                 "agent_completed",
                 state.step,
-                metadata={"status": AgentStatus.MAX_STEPS.value},
+                metadata={
+                    "status": AgentStatus.MAX_STEPS.value,
+                    "termination_reason": state.termination_reason,
+                },
             )
             return state
 
         except CodeWispError as exc:
             state.status = AgentStatus.FAILED
+            state.termination_reason = "failed"
             state.error = str(exc)
             self._emit(
                 state,
                 "agent_completed",
                 state.step,
-                metadata={"status": AgentStatus.FAILED.value, "error": str(exc)},
+                metadata={
+                    "status": AgentStatus.FAILED.value,
+                    "termination_reason": state.termination_reason,
+                    "error": str(exc),
+                },
             )
             return state
         except Exception as exc:  # noqa: BLE001 — 边界：不可预期错误 → FAILED
             state.status = AgentStatus.FAILED
+            state.termination_reason = "failed"
             state.error = f"Agent 运行失败：{exc}"
             self._emit(
                 state,
                 "agent_completed",
                 state.step,
-                metadata={"status": AgentStatus.FAILED.value, "error": state.error},
+                metadata={
+                    "status": AgentStatus.FAILED.value,
+                    "termination_reason": state.termination_reason,
+                    "error": state.error,
+                },
             )
             return state
 
-    # 调用 LLM 模型
     def _call_llm(
         self,
         state: AgentState,
@@ -158,14 +204,13 @@ class AgentLoop:
     ) -> LLMResponse:
         return self.llm.chat(conversation, tools=tools)
 
-    # 执行工具
     def _handle_tool_call(
         self,
         state: AgentState,
         conversation: Conversation,
         tool_call: ToolCall,
         step: int,
-    ) -> None:
+    ) -> ToolResult:
         self._emit(
             state,
             "tool_called",
@@ -178,7 +223,6 @@ class AgentLoop:
             },
         )
 
-        # 工具参数非法：返回错误结果
         if tool_call.parse_error:
             result = ToolResult(
                 success=False,
@@ -186,7 +230,6 @@ class AgentLoop:
                 error=f"工具参数非法：{tool_call.parse_error}",
                 metadata={"tool_name": tool_call.name, "tool_call_id": tool_call.id},
             )
-        # 工具名称为空：返回错误结果
         elif not (tool_call.name or "").strip():
             result = ToolResult(
                 success=False,
@@ -194,12 +237,10 @@ class AgentLoop:
                 error="工具名称为空。",
                 metadata={"tool_call_id": tool_call.id},
             )
-        # 工具名称和参数合法：执行工具
         else:
             result = self.executor.execute(tool_call.name, tool_call.arguments)
 
         event_type = "tool_completed" if result.success else "tool_failed"
-        # 发送工具执行事件
         self._emit(
             state,
             event_type,
@@ -211,13 +252,13 @@ class AgentLoop:
         observation = self._format_observation(result)
         call_id = tool_call.id or f"call_step{step}"
         conversation.add_tool_result(call_id, observation)
+        return result
 
     @staticmethod
     def _format_observation(result: ToolResult) -> str:
         """将 ToolResult 转为模型可读的 observation 文本。"""
         return json.dumps(result.to_dict(), ensure_ascii=False)
 
-    # 发送事件，用于记录 Agent 执行过程中的关键事件
     @staticmethod
     def _emit(
         state: AgentState,
@@ -235,3 +276,15 @@ class AgentLoop:
                 metadata=metadata or {},
             )
         )
+
+
+def _is_permission_required(result: ToolResult) -> bool:
+    """检测工具是否返回了 ASK / permission_required（框架硬停，不自动授权）。"""
+    if result.metadata.get("permission_required") is True:
+        return True
+    if result.metadata.get("policy_action") == "ask":
+        return True
+    output = result.output
+    if isinstance(output, dict) and output.get("permission_required") is True:
+        return True
+    return False
