@@ -3,11 +3,12 @@
 分类约定：
 - calculator / time：通用工具
 - workspace/：仓库只读 + 安全写入工具
-- execution/：（预留）命令与 git
+- execution/：受控命令执行（run_command）
 - intelligence/：（预留）LSP 等
 """
 
 from backend.app.tools.builtin.calculator import CalculatorTool
+from backend.app.tools.builtin.execution import RunCommandTool
 from backend.app.tools.builtin.time import GetCurrentTimeTool
 from backend.app.tools.builtin.workspace import (
     EditFileTool,
@@ -25,6 +26,7 @@ __all__ = [
     "GlobTool",
     "ListFilesTool",
     "ReadFileTool",
+    "RunCommandTool",
     "SearchCodeTool",
     "WriteFileTool",
 ]

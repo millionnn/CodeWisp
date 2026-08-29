@@ -84,6 +84,7 @@ def test_registry_exposes_coding_schemas(workspace: Workspace) -> None:
         "search_code",
         "edit_file",
         "write_file",
+        "run_command",
         "calculator",
         "get_current_time",
     } <= names

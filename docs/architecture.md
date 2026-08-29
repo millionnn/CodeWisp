@@ -26,63 +26,68 @@ User → AgentLoop → LLM (+ tools schema)
 ### V0.4-A：Workspace + 只读 Coding Tools
 
 ```
-AgentLoop
-  ↓
-ToolExecutor
-  ↓
-list_files / glob / read_file / search_code
-  ↓
-Workspace（路径边界 + 只读 IO）
+AgentLoop → ToolExecutor → list/glob/read/search → Workspace
 ```
 
-### V0.4-B：Safe Code Modification（当前）
+### V0.4-B：Safe Code Modification
 
 ```
-AgentLoop
-  ↓
-ToolExecutor
-  ↓
-edit_file / write_file
-  ↓
-Workspace.replace_text / write_text
-  ↓
-resolve_path + atomic write
+AgentLoop → ToolExecutor → edit_file / write_file → Workspace
+```
+
+### V0.4-C：Controlled Command Execution（当前）
+
+```text
+                    AgentLoop
+                        │
+                        ▼
+                   ToolExecutor
+                        │
+                        ▼
+                  run_command
+                        │
+                        ▼
+                ExecutionService
+                        │
+                 CommandPolicy
+                 /      |      \
+              ALLOW    ASK     DENY
+                │        │       │
+                ▼        │       ▼
+             execute     │     reject
+                         ▼
+                PermissionRequired
+                     （不执行）
 ```
 
 | 模块 | 职责 |
 |------|------|
-| `backend/app/workspace/` | `Workspace`：路径边界 + list/glob/read/search + write_text/replace_text |
-| `backend/app/tools/builtin/workspace/` | 一工具一文件：只读四工具 + `edit_file` / `write_file` |
-| `backend/app/agent/` | AgentLoop（无工具特判） |
+| `backend/app/execution/` | Request / Result / Policy / Service（语言无关） |
+| `backend/app/tools/builtin/execution/` | 薄 `run_command` Tool |
+| `backend/app/workspace/` | 路径边界；执行 cwd 复用 `resolve_path` |
+| `backend/app/agent/` | AgentLoop（无工具 / 语言特判） |
 | `backend/app/tools/` | Tool System |
-| `backend/app/cli/` | UI |
 
-**工具目录规划（与能力分类对齐）：**
+**工具目录：**
 
 ```text
 backend/app/tools/builtin/
-├── workspace/       # 已实现：list/glob/read/search + edit_file/write_file
-│                    # 预留：patch（若需要更细粒度补丁）
-├── execution/       # 预留：run_command, git（V0.4-C）
+├── workspace/       # list/glob/read/search + edit/write
+├── execution/       # run_command（V0.4-C）
 └── intelligence/    # 预留：LSP, ...
 ```
 
-**路径边界：** `Path.resolve()` + `relative_to(workspace_root)`，拒绝 `..` 穿越与 workspace 外绝对路径；写入同样复用，禁止 Tool 直接 `open()`。
+**Execution 安全机制：**
 
-**确定性编辑（edit_file）：** `old_text` 精确计数；仅当 `actual == expected_replacements` 时替换并原子写回；否则结构化失败，不猜测。
+- `shell=False`；`command` + `args` 列表，禁止 shell 拼接
+- `cwd` 必须落在 Workspace 内
+- 强制 timeout（默认 30s，上限 120s）
+- stdout/stderr 截断（`max_output_chars`）
+- Policy：`ALLOW` / `ASK` / `DENY`；ASK 返回 `permission_required`，不启动进程
 
-**原子写入：** 同目录临时文件 → `os.replace`，避免半截截断。
+**ExecutionService 与具体语言无关**——`pytest` / `mvn` / `cargo` 走同一套 Request → Policy → Service。
 
-**write_file：** 默认 `overwrite=false`；缺失父目录时自动创建（仍受边界约束）。
-
-**Workspace 语义（重要）：**
-
-- `Workspace` = Agent **服务的目标仓库**（用户打开的项目），不是 CodeWisp 源码树。
-- 根目录解析挂点：`resolve_workspace_root()`  
-  优先级：显式参数（CLI `--workspace` / 未来 Web Session）→ 环境变量 `CODEWISP_WORKSPACE` → `cwd`。
-- 未来 Web UI：每个 Session 绑定自己的 `workspace_root`，注入 `Workspace`，无需改 AgentLoop。
-
-**本阶段明确未实现（V0.4-C 及以后）：** `run_command` / shell / git / patch / LSP / self-correction。
+**本阶段明确未实现：** Self-Correction、Planning、Project Detection、LSP、Web UI、交互式 Permission、开放任意 Shell。
 
 ## 终止条件
 
@@ -99,7 +104,7 @@ CLI / Web UI
     ↓
 Agent Runtime（Loop · Planning · Context · Safety · Trace）
     ↓
-LLM API  +  Tool System（只读 + 安全写入已落地；Shell / git 后续）
+LLM API  +  Tool System（只读 + 写入 + 受控执行已落地）
 ```
 
 ## 配置项
@@ -109,3 +114,4 @@ LLM API  +  Tool System（只读 + 安全写入已落地；Shell / git 后续）
 | `LLM_API_KEY` | API 密钥（禁止入库） | — |
 | `LLM_BASE_URL` | OpenAI 兼容地址 | `https://api.deepseek.com` |
 | `LLM_MODEL` | 模型名 | `deepseek-chat` |
+| `CODEWISP_WORKSPACE` | 目标仓库根（可被 `--workspace` 覆盖） | cwd |

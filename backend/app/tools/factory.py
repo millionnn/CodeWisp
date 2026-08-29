@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from backend.app.execution.policy import CommandPolicy
+from backend.app.execution.service import ExecutionService
 from backend.app.tools.builtin.calculator import CalculatorTool
+from backend.app.tools.builtin.execution import RunCommandTool
 from backend.app.tools.builtin.time import GetCurrentTimeTool
 from backend.app.tools.builtin.workspace import (
     EditFileTool,
@@ -23,8 +26,10 @@ def create_default_registry(
     *,
     workspace: Workspace | None = None,
     workspace_root: str | Path | None = None,
+    execution_service: ExecutionService | None = None,
+    command_policy: CommandPolicy | None = None,
 ) -> ToolRegistry:
-    """创建并注册内置工具（含 V0.4-A 只读 + V0.4-B 写入 Coding Tools）。
+    """创建并注册内置工具（只读 / 写入 / 受控执行）。
 
     workspace / workspace_root 指向「目标仓库」，不是 CodeWisp 源码树。
     皆空时使用 cwd（与 resolve_workspace_root 的默认一致）。
@@ -45,6 +50,10 @@ def create_default_registry(
     registry.register(SearchCodeTool(ws))
     registry.register(EditFileTool(ws))
     registry.register(WriteFileTool(ws))
+
+    service = execution_service if execution_service is not None else ExecutionService(ws)
+    policy = command_policy if command_policy is not None else CommandPolicy()
+    registry.register(RunCommandTool(service, policy))
     return registry
 
 
@@ -52,8 +61,15 @@ def create_default_executor(
     *,
     workspace: Workspace | None = None,
     workspace_root: str | Path | None = None,
+    execution_service: ExecutionService | None = None,
+    command_policy: CommandPolicy | None = None,
 ) -> ToolExecutor:
     """创建绑定默认注册表的执行器。"""
     return ToolExecutor(
-        create_default_registry(workspace=workspace, workspace_root=workspace_root)
+        create_default_registry(
+            workspace=workspace,
+            workspace_root=workspace_root,
+            execution_service=execution_service,
+            command_policy=command_policy,
+        )
     )

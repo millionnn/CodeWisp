@@ -1,5 +1,39 @@
 # 开发日志
 
+## V0.4-C
+
+**日期：** 2026-08-30
+
+### 目标
+
+Language-Agnostic Controlled Command Execution：在 Workspace 内安全、受控地执行开发命令。
+
+### 已完成
+
+- `backend/app/execution/`：`ExecutionRequest` / `ExecutionResult` / `ExecutionService` / `CommandPolicy` / `PermissionRequired`
+- 工具：`run_command`（Policy → Service → ToolResult）
+- ALLOW / ASK / DENY；ASK 不启动 subprocess
+- 安全：`shell=False`、cwd 边界、timeout、输出截断
+- Agent 集成测试；文档更新
+- **未做** Self-Correction / 交互式 Permission UI / 项目语言探测
+
+### 设计决策
+
+1. **Execution 与 Tool / Agent 分层** — Service 不依赖 AgentLoop。
+2. **策略显式三态** — 为未来 Web 授权留 `permission_required` 接口。
+3. **默认拒绝未知命令** — allowlist 常见开发工具，而非开放任意二进制。
+4. **不做自动重试修复** — 失败作为 Observation，留给 V0.5。
+
+### 测试结果
+
+`pytest`：**186 passed**（V0.1–V0.4-B 回归 + V0.4-C Phase 2/3）。
+
+### 后续（需确认后再做）
+
+**V0.5 Self-Correction**：基于执行失败 Observation 的修改与再验证循环（仍非本版本）。
+
+---
+
 ## V0.4-B
 
 **日期：** 2026-08-29
@@ -31,7 +65,7 @@ Safe Code Modification：让 Agent 能在 Workspace 内**精确、安全、可�
 
 ### 后续（需确认后再做）
 
-**V0.4-C**：受控命令执行（如 `run_command`），仍须路径/权限边界。
+**V0.4-C**：受控命令执行 —— 已在上方完成。
 
 ---
 
