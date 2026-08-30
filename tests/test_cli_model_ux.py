@@ -61,7 +61,7 @@ def _make_agents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Agent
 def test_cli_help_and_providers_models(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     agents, ws = _make_agents(tmp_path, monkeypatch)
     outputs: list[str] = []
-    inputs = iter(["/help", "/providers", "/models", "/model", "/status", "/exit"])
+    inputs = iter(["/help", "/providers", "/models", "/model", "q", "/status", "/exit"])
     code = run_cli(
         agents,
         workspace_root=ws,
@@ -76,7 +76,7 @@ def test_cli_help_and_providers_models(tmp_path: Path, monkeypatch: pytest.Monke
     assert "deepseek" in blob and "openai" in blob
     assert "Available Models" in blob
     assert "deepseek-chat" in blob
-    assert "Current Model" in blob
+    assert "选择模型" in blob
     assert "CodeWisp Status" in blob
     assert "Resolver" in blob and "configured" in blob
 
@@ -122,7 +122,7 @@ def test_cli_invalid_model_does_not_mutate_session(
 ) -> None:
     agents, ws = _make_agents(tmp_path, monkeypatch)
     outputs: list[str] = []
-    inputs = iter(["/model totally-unknown-model", "/model", "/exit"])
+    inputs = iter(["/model totally-unknown-model", "/status", "/exit"])
     code = run_cli(
         agents,
         workspace_root=ws,
@@ -132,9 +132,9 @@ def test_cli_invalid_model_does_not_mutate_session(
     )
     assert code == 0
     assert any("Model Error" in line or "未知" in line for line in outputs)
-    # 失败后 /model 仍显示原身份（未改 Session）
-    assert any("Provider : deepseek" in line for line in outputs)
-    assert any("Model    : deepseek-chat" in line for line in outputs)
+    # 失败后 Session 未改；/status 仍显示原身份
+    blob = "\n".join(outputs)
+    assert "deepseek" in blob and "deepseek-chat" in blob
 
 
 def test_cli_session_model_isolation(
@@ -167,7 +167,7 @@ def test_cli_session_model_isolation(
         if n == 4:
             return f"/use {ids['a']}"
         if n == 5:
-            return "/model"
+            return "/status"
         return "/exit"
 
     code = run_cli(
@@ -185,8 +185,8 @@ def test_cli_session_model_isolation(
     assert by_title["Session A"].model_id == "deepseek-chat"
     assert by_title["Session B"].provider_id == "openai"
     assert by_title["Session B"].model_id == "gpt-4o"
-    # /use A 后 /model 显示 deepseek
-    assert any("Provider : deepseek" in line for line in outputs)
+    # /use A 后 /status 显示 deepseek
+    assert "deepseek" in "\n".join(outputs)
     runs_a = agents.sessions.list_runs(by_title["Session A"].session_id)
     runs_b = agents.sessions.list_runs(by_title["Session B"].session_id)
     assert runs_a[0].model_id == "deepseek-chat"

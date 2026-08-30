@@ -16,7 +16,9 @@ from backend.app.agent.state import AgentStatus
 from backend.app.banner import print_app_banner
 from backend.app.cli.event_sink import CliEventSink
 from backend.app.cli.help_text import HELP_TEXT, HELP_TEXT_PLAIN
+from backend.app.cli.prompt import read_line
 from backend.app.cli.render_md import render_markdown
+from backend.app.cli.select import select_option
 from backend.app.cli.theme import get_theme, make_console
 from backend.app.cli.trace import render_agent_trace, render_run_summary
 from backend.app.llm.errors import CodeWispError
@@ -52,13 +54,8 @@ def print_banner(
 
 
 def read_user_input(prompt: str = "> ") -> str | None:
-    """从标准输入读取一行。"""
-    try:
-        line = input(prompt)
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return None
-    return line.strip()
+    """从标准输入读取一行（prompt_toolkit：正确处理中文退格/方向键）。"""
+    return read_line(prompt)
 
 
 def _print_run_result(
@@ -189,8 +186,14 @@ def run_cli(
         output_fn=output_fn,
     )
 
+    # 仅测试注入的 input_fn 走编号/y-n；真实 TTY 用方向键 + prompt_toolkit
+    select_input = None if input_fn is read_user_input else input_fn
+
     # V0.8：交互授权 + 实时 EventSink（CLI 实现；AgentLoop 不感知 UI）
-    permission_handler = CliPermissionHandler(input_fn=input_fn, output_fn=output_fn)
+    permission_handler = CliPermissionHandler(
+        input_fn=select_input,
+        output_fn=output_fn,
+    )
     live_sink = CliEventSink(output_fn=output_fn, model_id=current.model_id)
 
     while True:
@@ -243,7 +246,9 @@ def run_cli(
             continue
 
         if lower == "/model" or lower.startswith("/model "):
-            current = _cmd_model(agents, current, user_text, output_fn)
+            current = _cmd_model(
+                agents, current, user_text, output_fn, input_fn=select_input
+            )
             live_sink.set_model_id(current.model_id)
             continue
 
@@ -289,9 +294,19 @@ def run_cli(
         if lower.startswith("/use"):
             parts = user_text.split(maxsplit=1)
             if len(parts) < 2 or not parts[1].strip():
-                output_fn("用法: /use <session_id>")
-                continue
-            target_id = parts[1].strip()
+                target_id = _pick_session(
+                    agents,
+                    current,
+                    title="选择要切换的 Session",
+                    output_fn=output_fn,
+                    input_fn=select_input,
+                    exclude_current=False,
+                )
+                if not target_id:
+                    output_fn("已取消。")
+                    continue
+            else:
+                target_id = parts[1].strip()
             if target_id == current.session_id:
                 output_fn(f"已在当前 Session: {current.session_id}")
                 continue
@@ -314,9 +329,19 @@ def run_cli(
         if cmd_word in DELETE_COMMANDS:
             parts = user_text.split(maxsplit=1)
             if len(parts) < 2 or not parts[1].strip():
-                output_fn("用法: /delete <session_id>（别名 /rm）")
-                continue
-            target_id = parts[1].strip()
+                target_id = _pick_session(
+                    agents,
+                    current,
+                    title="选择要删除的 Session",
+                    output_fn=output_fn,
+                    input_fn=select_input,
+                    exclude_current=False,
+                )
+                if not target_id:
+                    output_fn("已取消。")
+                    continue
+            else:
+                target_id = parts[1].strip()
             try:
                 target = agents.sessions.get_session(target_id)
             except SessionNotFoundError as exc:
@@ -540,15 +565,59 @@ def _cmd_model(
     current: Session,
     user_text: str,
     output_fn: Callable[[str], None],
+    *,
+    input_fn: Callable[[str], str | None] | None = None,
 ) -> Session:
     parts = user_text.split()
     if len(parts) == 1:
-        output_fn("Current Model\n")
-        output_fn(f"Provider : {current.provider_id}")
-        output_fn(f"Model    : {current.model_id}")
-        output_fn(f"Session  : {current.session_id}")
-        output_fn(f"Workspace: {current.workspace}")
-        return current
+        # 无参数：方向键选择模型
+        try:
+            models = agents.list_models()
+        except CodeWispError as exc:
+            output_fn(f"✗ {exc}")
+            return current
+        if not models:
+            output_fn("（无可用模型）")
+            return current
+
+        choices: list[tuple[tuple[str, str], str]] = []
+        default_index = 0
+        for i, model in enumerate(models):
+            label = f"{model.provider_id} / {model.model_id}  —  {model.display_name}"
+            choices.append(((model.provider_id, model.model_id), label))
+            if (
+                model.provider_id == current.provider_id
+                and model.model_id == current.model_id
+            ):
+                default_index = i
+                label = f"{label}  (current)"
+                choices[-1] = ((model.provider_id, model.model_id), label)
+
+        picked = select_option(
+            "选择模型",
+            choices,
+            default_index=default_index,
+            input_fn=input_fn,
+            output_fn=output_fn,
+        )
+        if picked is None:
+            output_fn("已取消。")
+            return current
+        provider_id, model_id = picked
+        try:
+            updated = agents.switch_session_model(
+                current.session_id,
+                provider_id=provider_id,
+                model_id=model_id,
+            )
+        except (ProviderError, ModelError, CodeWispError) as exc:
+            output_fn(f"✗ Model Error\n{exc}")
+            return current
+        output_fn(
+            f"已切换模型: {updated.provider_id}/{updated.model_id}\n"
+            f"Session: {updated.session_id}"
+        )
+        return updated
 
     try:
         provider_id, model_id = agents.parse_model_ref(
@@ -570,7 +639,7 @@ def _cmd_model(
                     output_fn(f"  {name}")
         except CodeWispError:
             pass
-        output_fn("\nUse /models to see available models.")
+        output_fn("\nUse /models to see available models，或 /model 进入选择菜单。")
         return current
 
     output_fn(
@@ -578,6 +647,41 @@ def _cmd_model(
         f"Session: {updated.session_id}"
     )
     return updated
+
+
+def _pick_session(
+    agents: AgentService,
+    current: Session,
+    *,
+    title: str,
+    output_fn: Callable[[str], None],
+    input_fn: Callable[[str], str | None] | None = None,
+    exclude_current: bool = False,
+) -> str | None:
+    items = agents.sessions.list_sessions()
+    if exclude_current:
+        items = [s for s in items if s.session_id != current.session_id]
+    if not items:
+        output_fn("（无 Session）")
+        return None
+    choices: list[tuple[str, str]] = []
+    default_index = 0
+    for i, session in enumerate(items):
+        mark = " (current)" if session.session_id == current.session_id else ""
+        label = (
+            f"{session.session_id}  {session.title}  "
+            f"[{session.provider_id}/{session.model_id}]{mark}"
+        )
+        choices.append((session.session_id, label))
+        if session.session_id == current.session_id:
+            default_index = i
+    return select_option(
+        title,
+        choices,
+        default_index=default_index,
+        input_fn=input_fn,
+        output_fn=output_fn,
+    )
 
 
 def _cmd_status(
