@@ -15,7 +15,7 @@ V0.4-C Controlled Command Execution
 V0.5 Self-Correction（Observation 驱动有限迭代）
 ```
 
-### V0.6：Session、持久化与 Backend API（当前）
+### V0.6：Session、持久化与 Backend API
 
 ```text
 CLI / FastAPI
@@ -53,7 +53,75 @@ Session
 | `backend/app/cli/` | CLI → AgentService |
 | `backend/app/workspace/` / `execution/` / `tools/` | 既有安全边界与工具 |
 
-**本阶段明确未实现：** Multi-Provider Runtime、Snapshot / Undo / Diff、Web UI、Context Compression、交互式 Permission UI。
+### V0.7 Phase 1：Provider / Model Domain + Registry
+
+建立 Provider / Model 领域与内存 Registry（身份目录）。
+
+### V0.7 Phase 2：ModelResolver + Session Runtime Integration
+
+```text
+Session.provider_id + model_id
+        ↓
+ModelResolver
+        ↓
+Provider / Model（Registry）
+        ↓
+LLMConfig + EnvCredentialSource
+        ↓
+LLMClient（OpenAI-compatible）
+        ↓
+AgentLoop(llm=...)
+```
+
+### V0.7 Phase 3：CLI Model / Provider UX + Interface Boundary（当前）
+
+```text
+CLI / Future Web UI
+        ↓
+   AgentService / SessionService
+        ↓
+   ModelResolver + AgentLoop
+        ↓
+   AgentEvent → CLI Trace Renderer
+                 （未来：SSE / WebSocket）
+```
+
+CLI 命令：`/help` `/providers` `/models` `/model` `/status` 等；模型切换经 `AgentService.switch_session_model` → Registry `lookup` → Session 持久化；**不**在 CLI 内实现 Loop / Resolver 业务副本。
+
+#### Interface Boundary for Future Web UI
+
+```text
+CLI                          Web UI
+ │                             │
+ │  直接调 Service             │  HTTP
+ ▼                             ▼
+AgentService ◄──────────── FastAPI
+ │
+ ├─ SessionService
+ ├─ ModelResolver
+ └─ AgentLoop → AgentEvent / Tools / Workspace
+         │
+         ▼
+    Persistence (SQLite)
+```
+
+共享：`SessionService`、`AgentService`、`ModelResolver`、Tool System、`AgentEvent`、Persistence。
+
+已有 API：`GET/POST /api/sessions`、`GET/POST .../messages` 等。  
+未来可增加（**本阶段未实现**）：`GET /api/sessions/{id}/events` 或 `GET /api/runs/{id}/events`（SSE/WebSocket 消费同一套 AgentEvent）。
+
+**禁止：** CLI → localhost HTTP → FastAPI 绕一圈；CLI 不得直连 SQLite Repository。
+
+路线图：
+
+```text
+V0.6  Session stores provider/model identity
+V0.7 Phase 1  Provider / Model domain + registry
+V0.7 Phase 2  Runtime resolution (ModelResolver)
+V0.7 Phase 3  CLI Model / Provider UX + AgentEvent trace  ← 当前
+V0.7 Phase 4  Web UI Foundation
+V0.8  Web interaction / Permission UI / Streaming
+```
 
 ## 终止条件
 

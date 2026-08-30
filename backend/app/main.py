@@ -19,10 +19,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from backend.app.cli.interface import run_cli
-from backend.app.llm.client import LLMClient, LLMConfig
+from backend.app.llm.client import LLMConfig
 from backend.app.llm.errors import CodeWispError, ConfigError
 from backend.app.persistence.paths import default_db_path
 from backend.app.persistence.store import SqliteStore
+from backend.app.providers.defaults import DEFAULT_MODEL_ID, DEFAULT_PROVIDER_ID
+from backend.app.providers.resolver import ModelResolver
 from backend.app.services.agent_service import AgentService
 from backend.app.workspace.errors import WorkspaceError
 from backend.app.workspace.resolve import resolve_workspace_root
@@ -77,12 +79,17 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--provider-id",
         default=None,
-        help="Session provider_id（默认 deepseek；仅记录身份，V0.6 不切换 SDK）。",
+        help=(
+            f"Session provider_id（默认 {DEFAULT_PROVIDER_ID}；"
+            "V0.7 Phase 2 经 ModelResolver 决定本次 LLM）。"
+        ),
     )
     parser.add_argument(
         "--model-id",
         default=None,
-        help="Session model_id（默认取 LLM_MODEL 或 deepseek-chat）。",
+        help=(
+            f"Session model_id（默认取 LLM_MODEL 或 {DEFAULT_MODEL_ID}）。"
+        ),
     )
     return parser.parse_args(argv)
 
@@ -104,19 +111,20 @@ def main(argv: list[str] | None = None) -> int:
     store: SqliteStore | None = None
     try:
         workspace_root = resolve_workspace_root(explicit=args.workspace)
+        # 启动时校验 LLM_API_KEY 等仍可用；每次 run 由 ModelResolver 按 Session 解析
         config = LLMConfig.from_env()
-        client = LLMClient(config)
         db_path = _resolve_db_path(args.db)
         store = SqliteStore(db_path)
         store.connect()
 
-        loop_kwargs: dict = {"llm": client}
+        resolver = ModelResolver.create_default()
+        loop_kwargs: dict = {"model_resolver": resolver}
         if args.max_steps is not None:
             loop_kwargs["max_steps"] = args.max_steps
         agents = AgentService(store, **loop_kwargs)
 
-        provider_id = (args.provider_id or "deepseek").strip()
-        model_id = (args.model_id or config.model or "deepseek-chat").strip()
+        provider_id = (args.provider_id or DEFAULT_PROVIDER_ID).strip()
+        model_id = (args.model_id or config.model or DEFAULT_MODEL_ID).strip()
 
         return run_cli(
             agents,

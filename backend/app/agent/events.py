@@ -12,6 +12,18 @@ step 结束      ← 下一步 llm_called 之前，或 agent_completed
 
 Persistence Adapter（后续 Phase）应消费这些事件 + AgentState.step，
 映射为稳定 ``step_id`` / ``tool_call_id``，而不是改写 AgentLoop。
+
+常见 event_type（CLI / 未来 Web 共用）：
+
+```text
+agent_started
+llm_called
+tool_called
+tool_completed
+tool_failed
+permission_required
+agent_completed
+```
 """
 
 from __future__ import annotations
@@ -34,6 +46,7 @@ class AgentEvent:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+#按照刚刚的event过程，将step生命周期与agentEvent对齐
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AgentEvent:
         if not isinstance(data, dict):

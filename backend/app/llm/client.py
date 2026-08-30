@@ -7,6 +7,10 @@
 
 本模块是可复用的「LLM 核心」，供 CLI / AgentLoop 调用。
 只负责 Model I/O，不执行工具。
+
+V0.7：逻辑上属于 OpenAI-compatible Provider Runtime
+（见 ``backend.app.providers.openai_compatible``）；
+Provider/Model Registry 只描述身份，Phase 1 不按 Session 切换本客户端。
 """
 
 from __future__ import annotations
@@ -88,7 +92,9 @@ class LLMClient:
             response = self._client.chat.completions.create(**request)
         except AuthenticationError as exc:
             raise LLMRequestError(
-                "LLM 鉴权失败，请检查 LLM_API_KEY 是否有效。"
+                "LLM 鉴权失败：请检查当前 Provider 对应的 API Key 是否有效"
+                "（DeepSeek→LLM_API_KEY；硅基流动→SILICONFLOW_API_KEY；"
+                "OpenAI→OPENAI_API_KEY）。"
             ) from exc
         except (APIConnectionError, APITimeoutError) as exc:
             raise LLMNetworkError(

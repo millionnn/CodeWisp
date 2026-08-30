@@ -1,5 +1,100 @@
 # 开发日志
 
+## V0.7 Phase 3
+
+**日期：** 2026-08-30
+
+### 目标
+
+CLI Model / Provider UX + Interface Boundary：把 Session / Provider / Model / AgentEvent 以可操作 CLI 呈现；CLI 仅作 Interface Layer。
+
+### 已完成
+
+- 命令：`/help` `/providers` `/models` `/model` `/status`；增强 `/session` `/sessions` `/new --provider-id/--model-id/--model`
+- 模型切换：`AgentService.switch_session_model` + `ModelResolver.lookup`（先校验再写 Session）
+- AgentEvent 轨迹渲染（`cli/trace.py`）：工具起止、Self-Correction 提示、PermissionRequired、Run 摘要
+- Loop 最小增量：`permission_required` 事件（不改编排语义）
+- 文档：Future Web UI Interface Boundary
+- 测试：`test_cli_model_ux.py` 等
+
+### 设计决策
+
+1. CLI → Service only；不直连 Repository / SQLite
+2. 模型校验用 `lookup`（不强制当场建 Client / 不要求 key 只为切模型）
+3. 凭据状态展示 `registered` / `configured`，不伪造 API 可用
+4. 不引入 rich/textual；纯文本轨迹
+5. 不实现交互 Permission UI / Streaming
+
+### 测试结果
+
+`pytest`：**297 passed**
+
+### 后续
+
+V0.7 Phase 4 Web UI Foundation；V0.8 Permission UI / Streaming。
+
+---
+
+## V0.7 Phase 2
+
+**日期：** 2026-08-30
+
+### 目标
+
+ModelResolver + Session Runtime Integration：Session 的 provider/model 身份真正决定本次 Agent 使用的 LLM。
+
+### 已完成
+
+- `ModelResolver` / `ResolvedModel`：查 Registry → 组装 `LLMConfig` → `LLMClient`
+- `AgentService` 接入 `model_resolver`；每次 run 按 Session resolve 后注入 AgentLoop
+- AgentRun 快照本次实际 provider/model；Session 事后变更不改写旧 Run
+- 结构化错误码：`UNKNOWN_PROVIDER` / `UNKNOWN_MODEL` / `MODEL_PROVIDER_MISMATCH` / `PROVIDER_CONFIGURATION_ERROR` / `MODEL_CONFIGURATION_ERROR`
+- CLI / API 默认使用 `ModelResolver.create_default()`；测试仍可用固定 `llm=`
+- 测试：`test_model_resolver` / `test_agent_service_model_resolution`
+
+### 设计决策
+
+1. **Resolution 在 AgentService**，AgentLoop 只收现成 `llm`
+2. **OpenAI-compatible 适配表**（base_url / api_key 环境变量）留在 Resolver，禁止进 Loop
+3. **凭据仍仅环境变量**，不入库
+4. **兼容** `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL`；openai 可选用 `OPENAI_*`
+
+### 测试结果
+
+`pytest`：**291 passed**（含 V0.1–V0.6 + Phase 1 + Phase 2）。
+
+**日期：** 2026-08-30
+
+### 目标
+
+Provider / Model Domain + Registry：稳定、可测试的身份目录，为 Phase 2 ModelResolver 做准备。不实现 Session → LLM 自动切换。
+
+### 已完成
+
+- `Provider` / `Model` 领域对象（无凭据字段）
+- `ProviderRegistry` / `ModelRegistry`（内存、防重复、结构化错误）
+- 默认目录：`deepseek` / `deepseek-chat` 与 `LLMConfig` 默认单一来源对齐；另含 `openai` 身份条目
+- `EnvCredentialSource` + `openai_compatible` Runtime 边界（复用既有 LLMClient，不推翻）
+- 测试：`test_provider` / `test_model` / `test_provider_registry` / `test_model_registry`
+- 文档明确 Phase 1 vs Phase 2
+
+### 设计决策
+
+1. **Registry 不依赖 SQLite / FastAPI / AgentLoop**
+2. **AgentLoop 仍只收 `llm=`** — 禁止 provider-specific 分支
+3. **凭据仅环境变量** — Domain / Session / DB 不存 key
+4. **默认值不复制第二套** — `DEFAULT_MODEL_ID = LLMConfig.DEFAULT_MODEL`
+
+### 测试结果
+
+见 Phase 1 完成报告（`pytest`：**277 passed**）。
+
+### 后续
+
+V0.7 Phase 2 — ModelResolver + Session Runtime Integration。
+
+---
+
 ## V0.6
 
 **日期：** 2026-08-30

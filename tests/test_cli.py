@@ -180,7 +180,7 @@ def test_cli_shows_tool_trace_and_answer(tmp_path: Path) -> None:
     )
 
     assert code == 0
-    assert any("[工具]" in line and "calculator" in line for line in outputs)
+    assert any("◇ calculator" in line or "✓ calculator" in line for line in outputs)
     assert any("答案是 4" in line for line in outputs)
 
 
@@ -235,7 +235,7 @@ def test_cli_session_commands_new_use_list_history(tmp_path: Path) -> None:
     assert any("已创建 Session" in line for line in outputs)
     assert any("已切换到 Session" in line for line in outputs)
     assert any("对话" in line and "底层轨迹" in line for line in outputs)
-    assert any("session_id:" in line for line in outputs)
+    assert any("ID        :" in line for line in outputs)
     assert EXIT_COMMANDS
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from backend.app.llm.messages import Conversation, Message
+from backend.app.providers.defaults import DEFAULT_MODEL_ID, DEFAULT_PROVIDER_ID
 from backend.app.persistence.agent_run_repository import AgentRunRepository
 from backend.app.persistence.conversation_repository import ConversationRepository
 from backend.app.persistence.errors import NotFoundError
@@ -27,8 +28,8 @@ class SessionService:
         *,
         title: str,
         workspace: str | Path,
-        provider_id: str = "deepseek",
-        model_id: str = "deepseek-chat",
+        provider_id: str = DEFAULT_PROVIDER_ID,
+        model_id: str = DEFAULT_MODEL_ID,
         status: str = "active",
     ) -> Session:
         title_text = (title or "").strip()
@@ -116,6 +117,7 @@ class SessionService:
     def list_steps(self, agent_run_id: str) -> list[AgentStep]:
         return self.runs.list_steps(agent_run_id)
 
+#进程重启后恢复 Session
     def resume_session(self, session_id: str) -> SessionResumeState:
         """进程重启后恢复 Session：元数据 + 完整 Conversation + AgentRun 列表。
 

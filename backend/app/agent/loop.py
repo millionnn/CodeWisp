@@ -138,6 +138,17 @@ class AgentLoop:
                         )
                         self._emit(
                             state,
+                            "permission_required",
+                            step,
+                            tool_name=tool_call.name,
+                            metadata={
+                                "error": state.error,
+                                "tool_call_id": tool_call.id,
+                                "arguments": tool_call.arguments,
+                            },
+                        )
+                        self._emit(
+                            state,
                             "agent_completed",
                             step,
                             metadata={

@@ -1,6 +1,6 @@
-"""AgentService：Session → Conversation → AgentLoop → Persistence。
+"""AgentService：Session → ModelResolver → AgentLoop → Persistence。
 
-不在 AgentLoop 内访问 SQLite；运行结束后根据 AgentState / events / 新增消息落库。
+不在 AgentLoop 内访问 SQLite / Registry；按 Session 身份 resolve LLM 后注入 Loop。
 """
 
 from __future__ import annotations
@@ -18,8 +18,16 @@ from backend.app.llm.response import ToolCall
 from backend.app.persistence.agent_run_repository import AgentRunRepository
 from backend.app.persistence.conversation_repository import ConversationRepository
 from backend.app.persistence.store import SqliteStore
+from backend.app.providers.errors import (
+    InvalidModelError,
+    UnknownModelError,
+)
+from backend.app.providers.model import Model
+from backend.app.providers.provider import Provider
+from backend.app.providers.resolver import ModelResolver, ResolvedModel
 from backend.app.session.errors import (
     InvalidMessageError,
+    InvalidSessionError,
     InvalidWorkspaceError,
     SessionBusyError,
 )
@@ -55,14 +63,16 @@ class AgentService:
         *,
         llm: LLMClient | None = None,
         llm_factory: LLMFactory | None = None,
+        model_resolver: ModelResolver | None = None,
         max_steps: int = DEFAULT_MAX_STEPS,
         system_prompt: str = DEFAULT_AGENT_SYSTEM_PROMPT,
     ) -> None:
-        if llm is None and llm_factory is None:
-            raise ValueError("必须提供 llm 或 llm_factory")
+        if llm is None and llm_factory is None and model_resolver is None:
+            raise ValueError("必须提供 llm、llm_factory 或 model_resolver")
         self._store = store
         self._llm = llm
         self._llm_factory = llm_factory
+        self._model_resolver = model_resolver
         self._max_steps = max_steps
         self._system_prompt = system_prompt
         self.sessions = SessionService(store)
@@ -79,11 +89,113 @@ class AgentService:
         """在已恢复的 Session 上继续一轮任务（``run`` 的语义别名）。"""
         return self.run(session_id, content)
 
-    def _resolve_llm(self, session: Session) -> LLMClient:
+    def resolve_model(self, session: Session) -> ResolvedModel | None:
+        """若配置了 ModelResolver，返回本次 Session 身份对应的 ResolvedModel。"""
+        if self._model_resolver is None:
+            return None
+        return self._model_resolver.resolve(session.provider_id, session.model_id)
+
+    @property
+    def model_resolver(self) -> ModelResolver | None:
+        return self._model_resolver
+
+    @property
+    def max_steps(self) -> int:
+        return self._max_steps
+
+    @property
+    def db_path(self) -> str:
+        return str(self._store.path)
+
+    def require_resolver(self) -> ModelResolver:
+        if self._model_resolver is None:
+            raise InvalidSessionError(
+                "当前 AgentService 未配置 ModelResolver，无法列出/切换模型。"
+            )
+        return self._model_resolver
+
+    def list_providers(self) -> list[Provider]:
+        return self.require_resolver().providers.list()
+
+    def list_models(self, provider_id: str | None = None) -> list[Model]:
+        resolver = self.require_resolver()
+        if provider_id:
+            return resolver.models.list_for_provider(provider_id)
+        return resolver.models.list()
+
+    def switch_session_model(
+        self,
+        session_id: str,
+        *,
+        provider_id: str,
+        model_id: str,
+    ) -> Session:
+        """校验 Registry 后更新 Session 模型身份（不立刻建 LLMClient）。"""
+        resolver = self.require_resolver()
+        resolver.lookup(provider_id, model_id)
+        return self.sessions.update_session(
+            session_id,
+            provider_id=provider_id,
+            model_id=model_id,
+        )
+
+    def parse_model_ref(
+        self,
+        *parts: str,
+        current_provider_id: str | None = None,
+    ) -> tuple[str, str]:
+        """解析 CLI ``/model`` 参数 → (provider_id, model_id)。
+
+        支持：
+        - ``provider model``
+        - 单独 ``model_id``（全局唯一时；否则若当前 provider 下存在则用之）
+        """
+        resolver = self.require_resolver()
+        tokens = [p.strip() for p in parts if p and p.strip()]
+        if not tokens:
+            raise InvalidModelError("请指定 model_id，或 provider_id + model_id")
+
+        if len(tokens) >= 2:
+            return tokens[0], tokens[1]
+
+        model_token = tokens[0]
+        matches = resolver.find_models_by_id(model_token)
+        if len(matches) == 1:
+            return matches[0].provider_id, matches[0].model_id
+        if len(matches) > 1 and current_provider_id:
+            for m in matches:
+                if m.provider_id == current_provider_id:
+                    return m.provider_id, m.model_id
+            raise UnknownModelError(
+                f"模型 {model_token!r} 对应多个 Provider："
+                + ", ".join(sorted({m.provider_id for m in matches}))
+                + "。请使用: /model <provider> <model>"
+            )
+        if len(matches) > 1:
+            raise UnknownModelError(
+                f"模型 {model_token!r} 对应多个 Provider："
+                + ", ".join(sorted({m.provider_id for m in matches}))
+                + "。请使用: /model <provider> <model>"
+            )
+        # 零匹配：若当前 provider 下 lookup 失败，给出 unknown
+        if current_provider_id and resolver.models.contains(
+            current_provider_id, model_token
+        ):
+            return current_provider_id, model_token
+        raise UnknownModelError(f"未知模型: {model_token}")
+
+    def _resolve_runtime(self, session: Session) -> tuple[LLMClient, str, str]:
+        """返回 (llm, provider_id, model_id)。优先级：llm_factory > model_resolver > llm。"""
         if self._llm_factory is not None:
-            return self._llm_factory(session)
+            return self._llm_factory(session), session.provider_id, session.model_id
+        if self._model_resolver is not None:
+            resolved = self._model_resolver.resolve(
+                session.provider_id,
+                session.model_id,
+            )
+            return resolved.llm, resolved.provider_id, resolved.model_id
         assert self._llm is not None
-        return self._llm
+        return self._llm, session.provider_id, session.model_id
 
     @contextmanager
     def _exclusive_session(self, session_id: str) -> Iterator[None]:
@@ -119,11 +231,13 @@ class AgentService:
         if persist_from == 0 and not any(m.role == "system" for m in conversation.messages):
             conversation.add_system(self._system_prompt)
 
+        llm, provider_id, model_id = self._resolve_runtime(session)
+
         run = self._runs.create_run(
             AgentRun.create(
                 session_id=session.session_id,
-                provider_id=session.provider_id,
-                model_id=session.model_id,
+                provider_id=provider_id,
+                model_id=model_id,
                 status=AgentStatus.RUNNING.value,
                 max_steps=self._max_steps,
             )
@@ -131,7 +245,6 @@ class AgentService:
 
         registry = create_default_registry(workspace=workspace)
         executor = ToolExecutor(registry)
-        llm = self._resolve_llm(session)
         loop = AgentLoop(
             llm,
             executor,

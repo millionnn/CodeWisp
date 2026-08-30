@@ -1,27 +1,35 @@
 """FastAPI 请求/响应 schema。"""
-
+#各个api的请求的参数规范
 from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from backend.app.providers.defaults import DEFAULT_MODEL_ID, DEFAULT_PROVIDER_ID
 
+#创建一个session请求
 class CreateSessionRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     title: str = Field(..., min_length=1)
     workspace: str = Field(..., min_length=1)
-    provider_id: str = "deepseek"
-    model_id: str = "deepseek-chat"
+    provider_id: str = DEFAULT_PROVIDER_ID
+    model_id: str = DEFAULT_MODEL_ID
 
-
+#更新一个session请求
 class PatchSessionRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     title: str | None = None
     status: str | None = None
     provider_id: str | None = None
     model_id: str | None = None
 
-
+#一个session响应
 class SessionResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     session_id: str
     title: str
     workspace: str
@@ -31,11 +39,11 @@ class SessionResponse(BaseModel):
     created_at: str | None = None
     updated_at: str | None = None
 
-
+#发送一条消息请求
 class PostMessageRequest(BaseModel):
     content: str = Field(..., min_length=1)
 
-
+#一个工具调用请求
 class ToolCallPayload(BaseModel):
     id: str
     name: str
@@ -43,7 +51,7 @@ class ToolCallPayload(BaseModel):
     arguments_raw: str | None = None
     parse_error: str | None = None
 
-
+#一条消息响应
 class MessageResponse(BaseModel):
     message_id: str | None = None
     session_id: str | None = None
@@ -56,8 +64,10 @@ class MessageResponse(BaseModel):
     tool_calls: list[ToolCallPayload] = Field(default_factory=list)
     created_at: str | None = None
 
-
+#一个agent工作响应
 class AgentRunResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     agent_run_id: str
     session_id: str
     provider_id: str
@@ -70,7 +80,7 @@ class AgentRunResponse(BaseModel):
     created_at: str | None = None
     completed_at: str | None = None
 
-
+#一个agent工作步骤响应
 class AgentStepResponse(BaseModel):
     step_id: str
     agent_run_id: str
@@ -81,6 +91,7 @@ class AgentStepResponse(BaseModel):
     completed_at: str | None = None
 
 
+#发送一条消息响应
 class PostMessageResponse(BaseModel):
     session: SessionResponse
     run: AgentRunResponse
