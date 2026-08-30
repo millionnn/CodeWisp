@@ -50,6 +50,7 @@ class Workspace:
 
     V0.4-A：只读 list/glob/read/search。
     V0.4-B：write_text / replace_text（原子写入 + 确定性替换）。
+    V0.9-1：read_text_state / delete_file（Snapshot capture / restore 原语）。
     """
 
     def __init__(self, root: str | Path) -> None:
@@ -295,6 +296,7 @@ class Workspace:
                         return hits
         return hits
 
+# 创建新文件，并写入内容
     def write_text(
         self,
         path: str | Path,
@@ -337,6 +339,7 @@ class Workspace:
             "bytes_written": len(content.encode("utf-8")),
         }
 
+# 替换文本，并原子写回（先写临时文件，再进行替换）
     def replace_text(
         self,
         path: str | Path,
@@ -383,6 +386,48 @@ class Workspace:
             "replacements": actual,
         }
 
+    def read_text_state(self, path: str | Path) -> dict[str, Any]:
+        """读取文件文本状态（供 Snapshot capture）。
+
+        返回：
+        - path: workspace-relative POSIX
+        - exists: bool
+        - content: str | None（不存在则为 None）
+        - size: int | None（UTF-8 字节数；不存在则为 None）
+
+        存在但非普通文件、或非 UTF-8 文本 → WorkspaceIOError。
+        """
+        target = self.resolve_path(path)
+        rel = self.relative_to_root(target)
+        if not target.exists():
+            return {"path": rel, "exists": False, "content": None, "size": None}
+        if not target.is_file():
+            raise WorkspaceIOError(f"不是文件：{rel}")
+        content = self._read_utf8_text(target)
+        return {
+            "path": rel,
+            "exists": True,
+            "content": content,
+            "size": len(content.encode("utf-8")),
+        }
+
+    def delete_file(self, path: str | Path) -> dict[str, Any]:
+        """删除 workspace 内的普通文件（供 Snapshot restore）。
+
+        不存在 → deleted=False（幂等）。拒绝目录。路径须经 resolve_path。
+        """
+        target = self.resolve_path(path)
+        rel = self.relative_to_root(target)
+        if not target.exists():
+            return {"path": rel, "deleted": False}
+        if not target.is_file():
+            raise WorkspaceIOError(f"不是文件，拒绝删除：{rel}")
+        try:
+            target.unlink()
+        except OSError as exc:
+            raise WorkspaceIOError(f"删除失败：{exc}") from exc
+        return {"path": rel, "deleted": True}
+
     def _read_utf8_text(self, target: Path) -> str:
         """读取目标文件为 UTF-8 文本；二进制或解码失败则结构化报错。"""
         try:
@@ -398,6 +443,7 @@ class Workspace:
                 f"无法以 UTF-8 解码：{self.relative_to_root(target)}"
             ) from exc
 
+#安全性保障
     def _ensure_parent_dir(self, target: Path, *, create_parents: bool) -> None:
         """确保写入目标的父目录存在，且始终位于 workspace 内。"""
         parent = target.parent
@@ -435,6 +481,7 @@ class Workspace:
                 f"创建后的父目录超出 workspace 边界：{parent}"
             ) from exc
 
+#写新内容，也是原子写入
     def _atomic_write_text(self, target: Path, content: str) -> None:
         """先写同目录临时文件，再 os.replace 原子替换，避免截断半成品。"""
         data = content.encode("utf-8")

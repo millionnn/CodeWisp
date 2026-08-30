@@ -10,7 +10,8 @@ from backend.app.cli.render_md import render_markdown
 from backend.app.cli.theme import get_theme, make_console
 from backend.app.cli.trace import render_live_event
 
-
+#cli接受到时间之后，怎么打印
+#调用工具的步骤行为单位打印，最终回答流式打印输出
 class CliEventSink:
     """Agent 执行过程中即时打印事件。
 

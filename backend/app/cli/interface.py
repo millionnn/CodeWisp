@@ -17,10 +17,12 @@ from backend.app.banner import print_app_banner
 from backend.app.cli.event_sink import CliEventSink
 from backend.app.cli.help_text import HELP_TEXT, HELP_TEXT_PLAIN
 from backend.app.cli.prompt import read_line
+from backend.app.cli.render_diff import render_file_diffs
 from backend.app.cli.render_md import render_markdown
 from backend.app.cli.select import select_option
 from backend.app.cli.theme import get_theme, make_console
 from backend.app.cli.trace import render_agent_trace, render_run_summary
+from backend.app.changes.errors import RevertError
 from backend.app.llm.errors import CodeWispError
 from backend.app.permissions.cli import CliPermissionHandler
 from backend.app.providers.defaults import DEFAULT_MODEL_ID, DEFAULT_PROVIDER_ID
@@ -49,7 +51,8 @@ def print_banner(
         output_fn(f"  Model     : {session.provider_id}/{session.model_id}")
     output_fn("")
     output_fn("  Commands  : /help  /sessions  /session  /new  /use  /history")
-    output_fn("              /providers  /models  /model  /status  /delete  /exit")
+    output_fn("              /providers  /models  /model  /diff  /revert")
+    output_fn("              /status  /delete  /exit")
     output_fn("  Type a task to continue the current Session.\n")
 
 
@@ -243,6 +246,28 @@ def run_cli(
 
         if lower == "/status":
             _cmd_status(agents, current, output_fn)
+            continue
+
+        if lower == "/diff" or lower.startswith("/diff "):
+            _cmd_diff(
+                agents,
+                current,
+                user_text,
+                output_fn=output_fn,
+                input_fn=select_input,
+            )
+            continue
+
+        if lower == "/revert" or lower.startswith("/revert "):
+            _cmd_revert(
+                agents,
+                current,
+                user_text,
+                output_fn=output_fn,
+                input_fn=select_input,
+                permission_handler=permission_handler,
+                event_sink=live_sink,
+            )
             continue
 
         if lower == "/model" or lower.startswith("/model "):
@@ -736,3 +761,364 @@ def _cmd_status(
     output_fn("CodeWisp Status\n")
     for k, v in rows:
         output_fn(f"  {k:<12} {v}")
+
+
+def _cmd_diff(
+    agents: AgentService,
+    current: Session,
+    user_text: str,
+    *,
+    output_fn: Callable[[str], None],
+    input_fn: Callable[[str], str | None] | None = None,
+) -> None:
+    """``/diff`` [step|run] [id] — 展示文件变更（Rich unified）。"""
+    kind, target_id = _parse_change_target(user_text, command="/diff")
+    try:
+        if kind is None and target_id is None:
+            run_id = _latest_run_with_changes(agents, current.session_id)
+            if not run_id:
+                # 尝试选择
+                run_id = _pick_run_with_changes(
+                    agents,
+                    current,
+                    title="选择要查看 Diff 的 Run",
+                    output_fn=output_fn,
+                    input_fn=input_fn,
+                )
+            if not run_id:
+                output_fn("（当前 Session 尚无文件变更。完成含 edit_file/write_file 的任务后再 /diff）")
+                return
+            diffs = agents.get_run_file_diffs(run_id)
+            run = agents.sessions.runs.get_run(run_id)
+            render_file_diffs(
+                diffs,
+                title=f"Diff · {_human_run_label(agents, run)}",
+                output_fn=output_fn,
+            )
+            return
+
+        if kind == "step" or (target_id and target_id.startswith("step_")):
+            step_id = target_id or _pick_step_with_changes(
+                agents,
+                current,
+                title="选择要查看 Diff 的 Step",
+                output_fn=output_fn,
+                input_fn=input_fn,
+            )
+            if not step_id:
+                output_fn("已取消。")
+                return
+            step = agents.sessions.runs.get_step(step_id)
+            if step.session_id != current.session_id:
+                output_fn("错误：该 Step 不属于当前 Session。")
+                return
+            run = agents.sessions.runs.get_run(step.agent_run_id)
+            diffs = agents.get_step_file_diffs(step_id)
+            render_file_diffs(
+                diffs,
+                title=f"Diff · {_human_step_label(agents, step_id, run)}",
+                output_fn=output_fn,
+            )
+            return
+
+        if kind == "run" or (target_id and target_id.startswith("run_")):
+            run_id = target_id or _pick_run_with_changes(
+                agents,
+                current,
+                title="选择要查看 Diff 的 Run",
+                output_fn=output_fn,
+                input_fn=input_fn,
+            )
+            if not run_id:
+                output_fn("已取消。")
+                return
+            run = agents.sessions.runs.get_run(run_id)
+            if run.session_id != current.session_id:
+                output_fn("错误：该 Run 不属于当前 Session。")
+                return
+            diffs = agents.get_run_file_diffs(run_id)
+            render_file_diffs(
+                diffs,
+                title=f"Diff · {_human_run_label(agents, run)}",
+                output_fn=output_fn,
+            )
+            return
+
+        output_fn("用法: /diff | /diff step <id> | /diff run <id>")
+    except (SessionError, RevertError, CodeWispError) as exc:
+        output_fn(f"错误：{exc}")
+    except Exception as exc:  # noqa: BLE001
+        from backend.app.persistence.errors import NotFoundError
+
+        if isinstance(exc, NotFoundError):
+            output_fn(f"错误：{exc}")
+            return
+        raise
+
+
+def _cmd_revert(
+    agents: AgentService,
+    current: Session,
+    user_text: str,
+    *,
+    output_fn: Callable[[str], None],
+    input_fn: Callable[[str], str | None] | None = None,
+    permission_handler=None,
+    event_sink=None,
+) -> None:
+    """``/revert`` step|run [id] — 经 PermissionHandler 回滚工作区。"""
+    kind, target_id = _parse_change_target(user_text, command="/revert")
+    try:
+        if kind is None and target_id is None:
+            kind = select_option(
+                "Revert 范围",
+                [
+                    ("step", "Step — 撤销单个 AgentStep"),
+                    ("run", "Run — 撤销整个 AgentRun"),
+                ],
+                default_index=0,
+                input_fn=input_fn,
+                output_fn=output_fn,
+            )
+            if kind is None:
+                output_fn("已取消。")
+                return
+
+        if kind == "step":
+            step_id = target_id
+            if not step_id:
+                step_id = _pick_step_with_changes(
+                    agents,
+                    current,
+                    title="选择要 Revert 的 Step",
+                    output_fn=output_fn,
+                    input_fn=input_fn,
+                )
+            if not step_id:
+                output_fn("已取消。")
+                return
+            step = agents.sessions.runs.get_step(step_id)
+            if step.session_id != current.session_id:
+                output_fn("错误：该 Step 不属于当前 Session。")
+                return
+            diffs = agents.get_step_file_diffs(step_id)
+            if diffs:
+                run = agents.sessions.runs.get_run(step.agent_run_id)
+                render_file_diffs(
+                    diffs,
+                    title=f"Will revert · {_human_step_label(agents, step_id, run)}",
+                    output_fn=output_fn,
+                )
+            report = agents.revert_step(
+                step_id,
+                permission_handler=permission_handler,
+                event_sink=event_sink,
+            )
+            _print_revert_report(report, output_fn)
+            return
+
+        if kind == "run":
+            run_id = target_id
+            if not run_id:
+                run_id = _pick_run_with_changes(
+                    agents,
+                    current,
+                    title="选择要 Revert 的 Run",
+                    output_fn=output_fn,
+                    input_fn=input_fn,
+                )
+            if not run_id:
+                output_fn("已取消。")
+                return
+            run = agents.sessions.runs.get_run(run_id)
+            if run.session_id != current.session_id:
+                output_fn("错误：该 Run 不属于当前 Session。")
+                return
+            diffs = agents.get_run_file_diffs(run_id)
+            if diffs:
+                render_file_diffs(
+                    diffs,
+                    title=f"Will revert · {_human_run_label(agents, run)}",
+                    output_fn=output_fn,
+                )
+            report = agents.revert_run(
+                run_id,
+                permission_handler=permission_handler,
+                event_sink=event_sink,
+            )
+            _print_revert_report(report, output_fn)
+            return
+
+        output_fn("用法: /revert step <id> | /revert run <id> | /revert")
+    except RevertError as exc:
+        output_fn(f"Revert 失败：{exc}")
+    except Exception as exc:  # noqa: BLE001
+        from backend.app.persistence.errors import NotFoundError
+
+        if isinstance(exc, NotFoundError):
+            output_fn(f"错误：{exc}")
+            return
+        raise
+
+
+def _print_revert_report(report, output_fn: Callable[[str], None]) -> None:
+    if report.denied:
+        output_fn("已拒绝 Revert（Permission DENY）。工作区未改动。")
+        return
+    if report.ok:
+        output_fn(
+            f"Revert 完成：{report.target_type} {report.target_id}\n"
+            f"  已恢复文件: {', '.join(report.applied) or '（无）'}\n"
+            f"  safety snapshot: {report.safety_snapshot_id}"
+        )
+    else:
+        output_fn(
+            f"Revert 部分失败：{report.target_type} {report.target_id}\n"
+            f"  applied: {', '.join(report.applied) or '—'}\n"
+            f"  failed: {report.failed}"
+        )
+
+
+def _parse_change_target(
+    user_text: str, *, command: str
+) -> tuple[str | None, str | None]:
+    """解析 ``/diff|/revert [step|run] [id]``。"""
+    parts = user_text.split()
+    if len(parts) <= 1:
+        return None, None
+    tokens = parts[1:]
+    if tokens[0] in {"step", "run"}:
+        kind = tokens[0]
+        tid = tokens[1] if len(tokens) > 1 else None
+        return kind, tid
+    raw = tokens[0]
+    if raw.startswith("step_"):
+        return "step", raw
+    if raw.startswith("run_"):
+        return "run", raw
+    return None, raw
+
+
+def _short_id(full_id: str) -> str:
+    if "_" in full_id:
+        return full_id.split("_", 1)[1][-6:]
+    return full_id[-6:]
+
+
+def _fmt_clock(iso: str | None) -> str:
+    if not iso:
+        return "—"
+    # 2026-08-30T17:00:00+00:00 → 17:00
+    try:
+        if "T" in iso:
+            return iso.split("T", 1)[1][:5]
+    except Exception:  # noqa: BLE001
+        pass
+    return iso[:16]
+
+
+def _path_names(paths: list[str], *, limit: int = 2) -> str:
+    names = [Path(p).name for p in paths]
+    if not names:
+        return "(no files)"
+    shown = ", ".join(names[:limit])
+    if len(names) > limit:
+        shown += f" +{len(names) - limit}"
+    return shown
+
+
+def _run_index(agents: AgentService, run) -> int:
+    runs = agents.sessions.list_runs(run.session_id)
+    for i, item in enumerate(runs, start=1):
+        if item.agent_run_id == run.agent_run_id:
+            return i
+    return 0
+
+
+def _human_run_label(agents: AgentService, run) -> str:
+    changes = agents.list_run_file_changes(run.agent_run_id)
+    paths = sorted({c.path for c in changes})
+    idx = _run_index(agents, run)
+    answer = (run.final_answer or "").strip().replace("\n", " ")
+    if len(answer) > 36:
+        answer = answer[:35] + "…"
+    hint = f"  ·  “{answer}”" if answer else ""
+    return (
+        f"Run #{idx}  ·  {len(changes)} file(s): {_path_names(paths)}  ·  "
+        f"{run.status}  ·  {_fmt_clock(run.created_at)}  ·  …{_short_id(run.agent_run_id)}"
+        f"{hint}"
+    )
+
+
+def _human_step_label(agents: AgentService, step_id: str, run) -> str:
+    step = agents.sessions.runs.get_step(step_id)
+    changes = agents.list_step_file_changes(step_id)
+    paths = sorted({c.path for c in changes})
+    badges = "".join(sorted({c.change_type.value[0] for c in changes})) or "?"
+    run_idx = _run_index(agents, run)
+    tools = agents.sessions.runs.list_tool_calls(step_id=step_id)
+    tool_names = ", ".join(dict.fromkeys(t.tool_name for t in tools if t.tool_name)) or "write"
+    return (
+        f"Step #{step.step_index}  ·  {tool_names}  ·  "
+        f"{_path_names(paths)} [{badges}]  ·  Run #{run_idx}  ·  "
+        f"{_fmt_clock(step.created_at or run.created_at)}  ·  …{_short_id(step_id)}"
+    )
+
+
+def _latest_run_with_changes(agents: AgentService, session_id: str) -> str | None:
+    runs = agents.sessions.list_runs(session_id)
+    for run in reversed(runs):
+        if agents.list_run_file_changes(run.agent_run_id):
+            return run.agent_run_id
+    return None
+
+
+def _pick_run_with_changes(
+    agents: AgentService,
+    current: Session,
+    *,
+    title: str,
+    output_fn: Callable[[str], None],
+    input_fn: Callable[[str], str | None] | None,
+) -> str | None:
+    runs = agents.sessions.list_runs(current.session_id)
+    choices: list[tuple[str, str]] = []
+    for run in reversed(runs):
+        changes = agents.list_run_file_changes(run.agent_run_id)
+        if not changes:
+            continue
+        choices.append((run.agent_run_id, _human_run_label(agents, run)))
+    if not choices:
+        return None
+    return select_option(
+        title, choices, default_index=0, input_fn=input_fn, output_fn=output_fn
+    )
+
+
+def _pick_step_with_changes(
+    agents: AgentService,
+    current: Session,
+    *,
+    title: str,
+    output_fn: Callable[[str], None],
+    input_fn: Callable[[str], str | None] | None,
+) -> str | None:
+    runs = agents.sessions.list_runs(current.session_id)
+    choices: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for run in reversed(runs):
+        for change in agents.list_run_file_changes(run.agent_run_id):
+            if change.agent_step_id in seen:
+                continue
+            seen.add(change.agent_step_id)
+            choices.append(
+                (
+                    change.agent_step_id,
+                    _human_step_label(agents, change.agent_step_id, run),
+                )
+            )
+    if not choices:
+        return None
+    return select_option(
+        title, choices, default_index=0, input_fn=input_fn, output_fn=output_fn
+    )

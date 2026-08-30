@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 from backend.app.cli.theme import get_theme, make_console
 
-
+#把回答渲染成好看的md
 def looks_like_markdown(text: str) -> bool:
     if not text:
         return False

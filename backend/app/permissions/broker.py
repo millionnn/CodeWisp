@@ -1,5 +1,6 @@
 """PendingPermissionBroker：供 FastAPI / 未来 Web UI 异步提交决定。"""
 
+#供 FastAPI / 未来 Web UI 异步提交决定（提交给broker，broker再提交给 PermissionHandler）
 from __future__ import annotations
 
 import threading
@@ -17,7 +18,7 @@ class _PendingSlot:
     decision: PermissionDecision | None = None
     cancelled: bool = False
 
-
+#阻塞当前进程，直到用户做出决定
 class PendingPermissionBroker:
     """按 session 挂起一个待授权请求，供 HTTP decide 唤醒。"""
 

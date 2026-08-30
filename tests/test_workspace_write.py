@@ -138,3 +138,32 @@ def test_replace_then_read_verifies(ws: Workspace) -> None:
     )
     data = ws.read("src/calculator.py")
     assert "return a * b" in data["content"]
+
+
+def test_read_text_state_exists_and_absent(ws: Workspace) -> None:
+    present = ws.read_text_state("src/calculator.py")
+    assert present["exists"] is True
+    assert "def add" in present["content"]
+    assert present["size"] == len(present["content"].encode("utf-8"))
+
+    missing = ws.read_text_state("src/missing.py")
+    assert missing["exists"] is False
+    assert missing["content"] is None
+    assert missing["path"] == "src/missing.py"
+
+
+def test_delete_file_and_idempotent(ws: Workspace) -> None:
+    ws.write_text("tmp_del.txt", "x\n")
+    assert ws.delete_file("tmp_del.txt")["deleted"] is True
+    assert not (ws.root / "tmp_del.txt").exists()
+    assert ws.delete_file("tmp_del.txt")["deleted"] is False
+
+
+def test_delete_file_path_traversal(ws: Workspace) -> None:
+    with pytest.raises(PathOutsideWorkspaceError):
+        ws.delete_file("../outside.txt")
+
+
+def test_delete_rejects_directory(ws: Workspace) -> None:
+    with pytest.raises(WorkspaceIOError, match="不是文件"):
+        ws.delete_file("src")

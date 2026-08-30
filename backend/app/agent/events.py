@@ -28,6 +28,10 @@ permission_requested
 permission_resolved
 answer_delta             # 最终回答流式片段（仅 EventSink）
 answer_discard           # 本回合改为 tool_calls 时丢弃已流式正文
+snapshot_created         # V0.9 Snapshot / pre_revert 等
+revert_started
+revert_completed
+revert_failed
 agent_completed
 agent_failed
 ```

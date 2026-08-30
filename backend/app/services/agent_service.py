@@ -22,8 +22,19 @@ from backend.app.agent.state import AgentState, AgentStatus
 from backend.app.llm.client import LLMClient
 from backend.app.llm.messages import Message
 from backend.app.llm.response import ToolCall
+from backend.app.changes.diff import compute_file_diffs
+from backend.app.changes.models import (
+    ChangeType,
+    FileChangeRecord,
+    FileDiff,
+    RevertReport,
+    WorkspaceSnapshot,
+)
+from backend.app.changes.revert import RevertService
+from backend.app.changes.tracker import WriteChangeTracker
 from backend.app.persistence.agent_run_repository import AgentRunRepository
 from backend.app.persistence.conversation_repository import ConversationRepository
+from backend.app.persistence.snapshot_repository import SnapshotRepository
 from backend.app.persistence.store import SqliteStore
 from backend.app.permissions.decision import PermissionDecision
 from backend.app.permissions.handler import PermissionHandler
@@ -92,6 +103,7 @@ class AgentService:
         self.sessions = SessionService(store)
         self._runs = AgentRunRepository(store)
         self._conversations = ConversationRepository(store)
+        self._snapshots = SnapshotRepository(store)
         self._lock_guard = threading.Lock()
         self._session_locks: dict[str, threading.Lock] = {}
 
@@ -201,7 +213,113 @@ class AgentService:
             return current_provider_id, model_token
         raise UnknownModelError(f"未知模型: {model_token}")
 
-    
+    def list_run_file_changes(self, agent_run_id: str) -> list[FileChangeRecord]:
+        """列出某次 AgentRun 产生的文件变更。"""
+        return self._snapshots.list_file_changes(agent_run_id=agent_run_id)
+
+    def list_step_file_changes(self, step_id: str) -> list[FileChangeRecord]:
+        """列出某个 AgentStep 产生的文件变更。"""
+        return self._snapshots.list_file_changes(agent_step_id=step_id)
+
+    def get_step_snapshots(
+        self, step_id: str
+    ) -> tuple[WorkspaceSnapshot | None, WorkspaceSnapshot | None]:
+        """返回 Step 的 pre_step / post_step Snapshot（若有写操作）。"""
+        return self._snapshots.get_step_boundary_snapshots(step_id)
+
+    def get_snapshot(self, snapshot_id: str) -> WorkspaceSnapshot:
+        return self._snapshots.get_snapshot(snapshot_id)
+
+    def get_step_file_diffs(self, step_id: str) -> list[FileDiff]:
+        """Step 的 pre_step vs post_step Diff。"""
+        before, after = self.get_step_snapshots(step_id)
+        if before is None or after is None:
+            return []
+        return compute_file_diffs(before, after)
+
+    def get_run_file_diffs(self, agent_run_id: str) -> list[FileDiff]:
+        """Run 内全部 FileChange 对应的 Diff（按 path 去重，后者覆盖）。"""
+        changes = self.list_run_file_changes(agent_run_id)
+        by_path: dict[str, FileDiff] = {}
+        for change in changes:
+            by_path[change.path] = self._file_change_to_diff(change)
+        return [by_path[k] for k in sorted(by_path)]
+
+    def _file_change_to_diff(self, change: FileChangeRecord) -> FileDiff:
+        before_text: str | None = None
+        after_text: str | None = None
+        if change.before_snapshot_id:
+            snap = self._snapshots.get_snapshot(change.before_snapshot_id)
+            f = snap.file_map().get(change.path)
+            if f and f.exists:
+                before_text = f.content
+        if change.after_snapshot_id:
+            snap = self._snapshots.get_snapshot(change.after_snapshot_id)
+            f = snap.file_map().get(change.path)
+            if f and f.exists:
+                after_text = f.content
+        return FileDiff(
+            path=change.path,
+            change_type=change.change_type,
+            before=before_text,
+            after=after_text,
+        )
+
+    def revert_step(
+        self,
+        step_id: str,
+        *,
+        permission_handler: PermissionHandler | None = None,
+        event_sink: AgentEventSink | None = None,
+    ) -> RevertReport:
+        """恢复指定 AgentStep 对工作区的修改；不删除历史记录。"""
+        step = self._runs.get_step(step_id)
+        session = self.sessions.get_session(step.session_id)
+        try:
+            workspace = Workspace(session.workspace)
+        except WorkspaceError as exc:
+            raise InvalidWorkspaceError(str(exc)) from exc
+        service = RevertService(
+            workspace,
+            self._snapshots,
+            permission_handler=(
+                permission_handler
+                if permission_handler is not None
+                else self._permission_handler
+            ),
+            event_sink=event_sink or self._event_sink,
+        )
+        return service.revert_step(step, session_workspace=session.workspace)
+
+    def revert_run(
+        self,
+        agent_run_id: str,
+        *,
+        permission_handler: PermissionHandler | None = None,
+        event_sink: AgentEventSink | None = None,
+    ) -> RevertReport:
+        """倒序恢复 AgentRun 内各 Step 的写修改；不删除历史记录。"""
+        run = self._runs.get_run(agent_run_id)
+        session = self.sessions.get_session(run.session_id)
+        try:
+            workspace = Workspace(session.workspace)
+        except WorkspaceError as exc:
+            raise InvalidWorkspaceError(str(exc)) from exc
+        steps = self._runs.list_steps(agent_run_id)
+        service = RevertService(
+            workspace,
+            self._snapshots,
+            permission_handler=(
+                permission_handler
+                if permission_handler is not None
+                else self._permission_handler
+            ),
+            event_sink=event_sink or self._event_sink,
+        )
+        return service.revert_run(
+            run, steps, session_workspace=session.workspace
+        )
+
     def _resolve_runtime(self, session: Session) -> tuple[LLMClient, str, str]:
         """返回 (llm, provider_id, model_id)。优先级：llm_factory > model_resolver > llm。"""
         if self._llm_factory is not None:
@@ -281,7 +399,8 @@ class AgentService:
 
         outer_sink: AgentEventSink = event_sink or self._event_sink
         recorder = RecordingEventSink()
-        sink: AgentEventSink = CompositeEventSink(recorder, outer_sink)
+        change_tracker = WriteChangeTracker(workspace)
+        sink: AgentEventSink = CompositeEventSink(recorder, change_tracker, outer_sink)
         handler = (
             permission_handler
             if permission_handler is not None
@@ -365,6 +484,13 @@ class AgentService:
             session=session,
             run=run,
             state=state,
+        )
+        self._persist_write_changes(
+            tracker=change_tracker,
+            workspace=workspace,
+            session=session,
+            run=run,
+            step_index_to_id=step_index_to_id,
         )
 
         persisted_ids: list[str] = []
@@ -479,6 +605,92 @@ class AgentService:
                     tool_call_to_step[tc.id] = step_id
 
         return step_index_to_id, tool_call_to_step
+
+    def _persist_write_changes(
+        self,
+        *,
+        tracker: WriteChangeTracker,
+        workspace: Workspace,
+        session: Session,
+        run: AgentRun,
+        step_index_to_id: dict[int, str],
+    ) -> None:
+        """将写工具 before/after 落为 Snapshot + FileChange（Loop 之后）。"""
+        completed = tracker.completed
+        if not completed:
+            return
+
+        by_step: dict[int, list] = {}
+        for item in completed:
+            by_step.setdefault(item.step_index, []).append(item)
+
+        root = str(workspace.root)
+        for step_index, items in sorted(by_step.items()):
+            step_id = step_index_to_id.get(step_index)
+            if not step_id:
+                continue
+
+            before_files = [t.before for t in items]
+            after_files = [(t.after or t.before) for t in items]
+            self._snapshots.save_snapshot(
+                WorkspaceSnapshot.create(
+                    workspace_root=root,
+                    files=before_files,
+                    reason="pre_step",
+                    session_id=session.session_id,
+                    agent_run_id=run.agent_run_id,
+                    agent_step_id=step_id,
+                )
+            )
+            self._snapshots.save_snapshot(
+                WorkspaceSnapshot.create(
+                    workspace_root=root,
+                    files=after_files,
+                    reason="post_step",
+                    session_id=session.session_id,
+                    agent_run_id=run.agent_run_id,
+                    agent_step_id=step_id,
+                )
+            )
+
+            for tracked in items:
+                after_file = tracked.after or tracked.before
+                before_snap = self._snapshots.save_snapshot(
+                    WorkspaceSnapshot.create(
+                        workspace_root=root,
+                        files=[tracked.before],
+                        reason="pre_tool",
+                        session_id=session.session_id,
+                        agent_run_id=run.agent_run_id,
+                        agent_step_id=step_id,
+                        tool_call_id=tracked.tool_call_id,
+                    )
+                )
+                after_snap = self._snapshots.save_snapshot(
+                    WorkspaceSnapshot.create(
+                        workspace_root=root,
+                        files=[after_file],
+                        reason="post_tool",
+                        session_id=session.session_id,
+                        agent_run_id=run.agent_run_id,
+                        agent_step_id=step_id,
+                        tool_call_id=tracked.tool_call_id,
+                    )
+                )
+                change_type = tracker.change_type_for(tracked)
+                if change_type is ChangeType.UNCHANGED:
+                    continue
+                self._snapshots.add_file_change(
+                    session_id=session.session_id,
+                    agent_run_id=run.agent_run_id,
+                    agent_step_id=step_id,
+                    tool_call_id=tracked.tool_call_id,
+                    path=tracked.path,
+                    change_type=change_type,
+                    before_snapshot_id=before_snap.snapshot_id,
+                    after_snapshot_id=after_snap.snapshot_id,
+                )
+
 
 #解析一条消息的步骤id
 def _resolve_message_step_id(

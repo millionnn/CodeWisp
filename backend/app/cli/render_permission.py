@@ -7,6 +7,7 @@ from collections.abc import Callable
 from backend.app.cli.theme import get_theme, make_console
 from backend.app.permissions.request import PermissionRequest
 
+#权限请求怎么打印
 
 def render_permission_prompt(
     permission: PermissionRequest,

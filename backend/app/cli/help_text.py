@@ -23,6 +23,14 @@ HELP_TEXT = """\
   [cyan]/model[/] <provider> <model>
                        Switch provider + model
 
+[bold]Changes[/]
+  [cyan]/diff[/]                Diff latest run (Rich +/−)
+  [cyan]/diff[/] step <id>      Diff one AgentStep
+  [cyan]/diff[/] run <id>       Diff one AgentRun
+  [cyan]/revert[/]              Pick step/run then revert (asks permission)
+  [cyan]/revert[/] step <id>    Revert one AgentStep
+  [cyan]/revert[/] run <id>     Revert one AgentRun
+
 [bold]Runtime[/]
   [cyan]/status[/]              Show current runtime status
 
@@ -56,6 +64,14 @@ Model:
   /model <id>          Switch model (unique model_id)
   /model <provider> <model>
                        Switch provider + model
+
+Changes:
+  /diff                Diff latest run (Rich +/−)
+  /diff step <id>      Diff one AgentStep
+  /diff run <id>       Diff one AgentRun
+  /revert              Pick step/run then revert (asks permission)
+  /revert step <id>    Revert one AgentStep
+  /revert run <id>     Revert one AgentRun
 
 Runtime:
   /status              Show current runtime status

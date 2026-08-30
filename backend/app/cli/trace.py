@@ -170,6 +170,25 @@ def render_live_event(
         if err:
             _out(output_fn, f"  {err}", "cw.dim")
 
+    elif event.event_type == "revert_started":
+        target = (event.metadata or {}).get("target_type")
+        tid = (event.metadata or {}).get("target_id")
+        _out(output_fn, f"\n  ↺  Revert started ({target} {tid})", "cw.warn")
+
+    elif event.event_type == "snapshot_created":
+        reason = (event.metadata or {}).get("reason")
+        sid = (event.metadata or {}).get("snapshot_id")
+        _out(output_fn, f"  ○  Snapshot [{reason}] {sid}", "cw.dim")
+
+    elif event.event_type == "revert_completed":
+        _out(output_fn, "  ✓  Revert completed", "cw.ok")
+
+    elif event.event_type == "revert_failed":
+        if (event.metadata or {}).get("denied"):
+            _out(output_fn, "  ✗  Revert denied", "cw.fail")
+        else:
+            _out(output_fn, "  ✗  Revert failed", "cw.fail")
+
     elif event.event_type == "answer_delta":
         delta = (event.metadata or {}).get("delta") or ""
         if delta and stream_write_fn is not None:

@@ -10,6 +10,7 @@ from functools import lru_cache
 from rich.console import Console
 from rich.theme import Theme
 
+#cli主题
 
 CODEWISP_THEME = Theme(
     {
@@ -25,6 +26,12 @@ CODEWISP_THEME = Theme(
         "cw.value": "white",
         "cw.cmd": "bold white",
         "cw.step": "dim",
+        "cw.diff.file": "bold white",
+        "cw.diff.add": "green",
+        "cw.diff.del": "red",
+        "cw.diff.hunk": "cyan",
+        "cw.diff.meta": "dim",
+        "cw.diff.stat": "bold",
     }
 )
 
