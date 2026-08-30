@@ -17,12 +17,19 @@ Persistence Adapter（后续 Phase）应消费这些事件 + AgentState.step，
 
 ```text
 agent_started
+llm_started
 llm_called
 tool_called
 tool_completed
 tool_failed
+command_output_line      # run_command 按行 stdout/stderr
 permission_required
+permission_requested
+permission_resolved
+answer_delta             # 最终回答流式片段（仅 EventSink）
+answer_discard           # 本回合改为 tool_calls 时丢弃已流式正文
 agent_completed
+agent_failed
 ```
 """
 

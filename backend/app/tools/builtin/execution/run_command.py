@@ -12,20 +12,37 @@ from backend.app.execution.request import (
 )
 from backend.app.execution.result import PermissionRequired
 from backend.app.execution.service import ExecutionService
+from backend.app.permissions.decision import PermissionDecision
+from backend.app.permissions.errors import PermissionInterruptedError
+from backend.app.permissions.handler import PermissionHandler
+from backend.app.permissions.request import PermissionRequest
 from backend.app.tools.base import Tool
 from backend.app.tools.result import ToolResult
 
 
 class RunCommandTool(Tool):
-    """薄封装：Request → Policy →（ALLOW 时）Service → ToolResult。"""
+    """薄封装：Request → Policy →（ASK 时 Handler）→ Service → ToolResult。"""
 
     def __init__(
         self,
         service: ExecutionService,
         policy: CommandPolicy | None = None,
+        *,
+        permission_handler: PermissionHandler | None = None,
+        session_id: str | None = None,
+        agent_run_id: str | None = None,
+        on_permission_wait: Any | None = None,
+        on_permission_resolved: Any | None = None,
+        on_command_line: Any | None = None,
     ) -> None:
         self._service = service
         self._policy = policy if policy is not None else CommandPolicy()
+        self._permission_handler = permission_handler
+        self._session_id = session_id
+        self._agent_run_id = agent_run_id
+        self._on_permission_wait = on_permission_wait
+        self._on_permission_resolved = on_permission_resolved
+        self._on_command_line = on_command_line
 
     @property
     def name(self) -> str:
@@ -36,8 +53,8 @@ class RunCommandTool(Tool):
         return (
             "在工作区内执行受控的开发/测试/构建命令。"
             "命令必须遵循当前执行策略，并且工作目录必须位于工作区内。"
-            "对于需要用户授权的命令，工具会返回 permission_required，"
-            "而不会绕过权限策略直接执行。"
+            "对于需要用户授权的命令：若运行时提供了 PermissionHandler，"
+            "将交互征求 ALLOW/DENY；否则返回 permission_required 并停止自动继续。"
             "不要把整段 shell 脚本当作 command；请使用 command + args 列表。"
         )
 
@@ -83,7 +100,6 @@ class RunCommandTool(Tool):
                 output=None,
                 error="args 必须是字符串数组。",
             )
-
         cwd = arguments.get("cwd", ".")
         timeout = arguments.get("timeout", DEFAULT_TIMEOUT_SECONDS)
         try:
@@ -93,7 +109,7 @@ class RunCommandTool(Tool):
                 cwd=str(cwd) if cwd is not None else ".",
                 timeout=float(timeout),
             )
-        except Exception as exc:  # noqa: BLE001 — 构造期非法 → 结构化失败
+        except Exception as exc:  # noqa: BLE001
             return ToolResult(success=False, output=None, error=str(exc))
 
         decision = self._policy.decide(request)
@@ -116,32 +132,110 @@ class RunCommandTool(Tool):
             )
 
         if decision.action is PolicyAction.ASK:
+            return self._handle_ask(request, decision.reason)
+
+        return self._execute_allow(request)
+
+    def _handle_ask(self, request: ExecutionRequest, reason: str) -> ToolResult:
+        # 无 Handler：V0.7 兼容 — 返回 permission_required，由 Loop 硬停
+        if self._permission_handler is None:
             permission = PermissionRequired(
                 command=request.command,
                 args=request.args,
                 cwd=request.cwd,
-                reason=decision.reason,
+                reason=reason,
             )
             return ToolResult(
                 success=False,
                 output=permission.to_dict(),
-                error=decision.reason,
+                error=reason,
                 metadata={
                     "tool_name": self.name,
-                    "policy_action": decision.action.value,
+                    "policy_action": PolicyAction.ASK.value,
                     "permission_required": True,
                 },
             )
 
-        # ALLOW：真正执行
-        result = self._service.run(request)
+        perm_req = PermissionRequest(
+            command=request.command,
+            args=tuple(request.args),
+            cwd=request.cwd,
+            reason=reason,
+            tool_name=self.name,
+            session_id=self._session_id,
+            agent_run_id=self._agent_run_id,
+        )
+        if self._on_permission_wait is not None:
+            self._on_permission_wait(perm_req)
+
+        try:
+            user_decision = self._permission_handler.request(perm_req)
+        except PermissionInterruptedError as exc:
+            if self._on_permission_resolved is not None:
+                self._on_permission_resolved(perm_req, None)
+            return ToolResult(
+                success=False,
+                output={
+                    "denied": True,
+                    "user_denied": True,
+                    "interrupted": True,
+                    "command": request.command,
+                    "args": list(request.args),
+                    "cwd": request.cwd,
+                    "permission_request_id": perm_req.request_id,
+                },
+                error=str(exc),
+                metadata={
+                    "tool_name": self.name,
+                    "policy_action": PolicyAction.ASK.value,
+                    "permission_decision": "interrupted",
+                },
+            )
+
+        if self._on_permission_resolved is not None:
+            self._on_permission_resolved(perm_req, user_decision)
+
+        if user_decision is PermissionDecision.ALLOW:
+            result = self._execute_allow(request)
+            result.metadata = {
+                **(result.metadata or {}),
+                "permission_decision": PermissionDecision.ALLOW.value,
+                "permission_request_id": perm_req.request_id,
+            }
+            return result
+
+        # 用户 DENY：写入 observation，不设 permission_required（Loop 可继续）
+        return ToolResult(
+            success=False,
+            output={
+                "denied": True,
+                "user_denied": True,
+                "command": request.command,
+                "args": list(request.args),
+                "cwd": request.cwd,
+                "permission_request_id": perm_req.request_id,
+                "reason": reason,
+            },
+            error="用户拒绝执行该命令（DENY）。",
+            metadata={
+                "tool_name": self.name,
+                "policy_action": PolicyAction.ASK.value,
+                "permission_decision": PermissionDecision.DENY.value,
+            },
+        )
+
+    def _execute_allow(self, request: ExecutionRequest) -> ToolResult:
+        if self._on_command_line is not None:
+            result = self._service.run(request, on_line=self._on_command_line)
+        else:
+            result = self._service.run(request)
         return ToolResult(
             success=result.success,
             output=result.to_dict(),
             error=None if result.success else (result.stderr or "命令执行失败。"),
             metadata={
                 "tool_name": self.name,
-                "policy_action": decision.action.value,
+                "policy_action": PolicyAction.ALLOW.value,
                 "exit_code": result.exit_code,
                 "timed_out": result.timed_out,
                 "truncated": result.truncated,

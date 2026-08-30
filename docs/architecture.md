@@ -73,7 +73,34 @@ LLMClient（OpenAI-compatible）
 AgentLoop(llm=...)
 ```
 
-### V0.7 Phase 3：CLI Model / Provider UX + Interface Boundary（当前）
+### V0.7 Phase 3：CLI Model / Provider UX + Interface Boundary
+
+### V0.8：Interactive Permission + Live Agent Event（当前）
+
+```text
+CommandPolicy (ALLOW / ASK / DENY)
+      ↓ ASK
+PermissionHandler → ALLOW / DENY
+      ↓
+ExecutionService / Observation → AgentLoop 继续
+
+AgentLoop
+      ↓ AgentEvent
+EventSink → CLI 实时 Trace / 未来 SSE
+```
+
+核心能力：
+
+- **Interactive Permission**：ASK 经 `PermissionHandler`（`CliPermissionHandler` / `BrokerPermissionHandler`），不再无 Handler 时硬停；有 Handler 时 ALLOW 执行 / DENY 写 observation 并继续
+- **EventSink**：`AgentLoop` / `AgentService` 运行时 `emit`；CLI `CliEventSink` 实时渲染；`event_sink=None` 时与 V0.7 兼容
+- **Run 状态**：`WAITING_PERMISSION`（等待授权时投影到 AgentRun）
+- **FastAPI**：`/api/providers` `/api/models`、pending/decide Permission、`POST .../messages` 返回 `events`
+
+| 模块 | 职责 |
+|------|------|
+| `backend/app/permissions/` | PermissionRequest / Decision / Handler / Broker |
+| `backend/app/agent/event_sink.py` | EventSink 抽象（Null / Recording / Composite） |
+| `backend/app/cli/event_sink.py` | CLI 实时 Trace |
 
 ```text
 CLI / Future Web UI
@@ -118,9 +145,9 @@ AgentService ◄──────────── FastAPI
 V0.6  Session stores provider/model identity
 V0.7 Phase 1  Provider / Model domain + registry
 V0.7 Phase 2  Runtime resolution (ModelResolver)
-V0.7 Phase 3  CLI Model / Provider UX + AgentEvent trace  ← 当前
-V0.7 Phase 4  Web UI Foundation
-V0.8  Web interaction / Permission UI / Streaming
+V0.7 Phase 3  CLI Model / Provider UX + AgentEvent trace
+V0.8  Interactive Permission + Live EventSink  ← 当前
+V0.9  Web UI / SSE / Snapshot（未实现）
 ```
 
 ## 终止条件
@@ -129,7 +156,8 @@ V0.8  Web interaction / Permission UI / Streaming
 |------|------|
 | `COMPLETED` | 无 tool_calls，产出最终回答 |
 | `MAX_STEPS` | 迭代预算耗尽 |
-| `PERMISSION_REQUIRED` | ASK / permission_required，硬停 |
+| `PERMISSION_REQUIRED` | 无 PermissionHandler 时 ASK 硬停（V0.7 兼容） |
+| `WAITING_PERMISSION` | 有 Handler 时等待用户 ALLOW/DENY（运行中投影） |
 | `FAILED` | 不可恢复错误 |
 
 ## 最终架构 / 未来架构

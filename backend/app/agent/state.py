@@ -16,8 +16,10 @@ class AgentStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     MAX_STEPS = "max_steps"
-    # V0.5：遇 ASK / permission_required 时框架硬停（不自动授权）
+    # V0.5：无 PermissionHandler 时 ASK → 硬停
     PERMISSION_REQUIRED = "permission_required"
+    # V0.8：交互授权等待中（AgentRun 可投影此状态）
+    WAITING_PERMISSION = "waiting_permission"
 
 
 @dataclass

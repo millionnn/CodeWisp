@@ -1,8 +1,9 @@
 """领域对象 → API schema 映射。"""
-
+#将领域对象转换为api的响应
 from __future__ import annotations
 
 from backend.app.api.schemas import (
+    AgentEventResponse,
     AgentRunResponse,
     AgentStepResponse,
     MessageResponse,
@@ -15,6 +16,7 @@ from backend.app.services.agent_service import AgentRunResult
 from backend.app.session.models import AgentRun, AgentStep, Session
 
 
+#将一个session转换为api的响应
 def session_to_response(session: Session) -> SessionResponse:
     return SessionResponse(
         session_id=session.session_id,
@@ -27,7 +29,7 @@ def session_to_response(session: Session) -> SessionResponse:
         updated_at=session.updated_at,
     )
 
-
+#将一个消息转换为api的响应
 def message_to_response(message: Message) -> MessageResponse:
     return MessageResponse(
         message_id=message.message_id,
@@ -51,7 +53,7 @@ def message_to_response(message: Message) -> MessageResponse:
         created_at=message.created_at,
     )
 
-
+#将一个agent工作转换为api的响应
 def run_to_response(run: AgentRun) -> AgentRunResponse:
     return AgentRunResponse(
         agent_run_id=run.agent_run_id,
@@ -67,7 +69,7 @@ def run_to_response(run: AgentRun) -> AgentRunResponse:
         completed_at=run.completed_at,
     )
 
-
+#将一个agent工作步骤转换为api的响应
 def step_to_response(step: AgentStep) -> AgentStepResponse:
     return AgentStepResponse(
         step_id=step.step_id,
@@ -79,7 +81,7 @@ def step_to_response(step: AgentStep) -> AgentStepResponse:
         completed_at=step.completed_at,
     )
 
-
+#将一个agent工作结果转换为api的响应
 def agent_result_to_response(
     result: AgentRunResult,
     *,
@@ -94,4 +96,14 @@ def agent_result_to_response(
         termination_reason=result.state.termination_reason,
         error=result.state.error,
         messages=[message_to_response(m) for m in messages],
+        events=[
+            AgentEventResponse(
+                event_type=e.event_type,
+                step=e.step,
+                timestamp=e.timestamp,
+                tool_name=e.tool_name,
+                metadata=dict(e.metadata or {}),
+            )
+            for e in result.state.events
+        ],
     )

@@ -28,6 +28,7 @@ class PatchSessionRequest(BaseModel):
 
 #一个session响应
 class SessionResponse(BaseModel):
+    #获取模型配置
     model_config = ConfigDict(protected_namespaces=())
 
     session_id: str
@@ -91,6 +92,14 @@ class AgentStepResponse(BaseModel):
     completed_at: str | None = None
 
 
+class AgentEventResponse(BaseModel):
+    event_type: str
+    step: int
+    timestamp: float
+    tool_name: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 #发送一条消息响应
 class PostMessageResponse(BaseModel):
     session: SessionResponse
@@ -101,3 +110,48 @@ class PostMessageResponse(BaseModel):
     termination_reason: str | None = None
     error: str | None = None
     messages: list[MessageResponse]
+    events: list[AgentEventResponse] = Field(default_factory=list)
+
+
+class PermissionRequestResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    request_id: str
+    command: str
+    args: list[str] = Field(default_factory=list)
+    cwd: str
+    reason: str = ""
+    tool_name: str = "run_command"
+    created_at: str | None = None
+    session_id: str | None = None
+    agent_run_id: str | None = None
+
+
+class PermissionPendingResponse(BaseModel):
+    pending: PermissionRequestResponse | None = None
+
+
+class PermissionDecideRequest(BaseModel):
+    request_id: str = Field(..., min_length=1)
+    decision: str = Field(..., min_length=1, description="allow|deny|y|n|yes|no")
+
+
+class ProviderResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    provider_id: str
+    display_name: str
+    capabilities: list[str] = Field(default_factory=list)
+    model_ids: list[str] = Field(default_factory=list)
+    credential_configured: bool = False
+
+
+class ModelResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    model_id: str
+    provider_id: str
+    display_name: str
+    context_window: int | None = None
+    supports_tool_call: bool = True
+    supports_streaming: bool = False

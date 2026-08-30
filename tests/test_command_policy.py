@@ -44,6 +44,15 @@ def test_ask_npm_install() -> None:
     assert "授权" in d.reason or "install" in d.reason.lower()
 
 
+def test_ask_npm_i_alias() -> None:
+    """npm i 是 install 缩写，必须 ASK，不能因 allowlist 直接执行。"""
+    assert _decide("npm", "i").action is PolicyAction.ASK
+
+
+def test_ask_npm_add() -> None:
+    assert _decide("npm", "add", "lodash").action is PolicyAction.ASK
+
+
 def test_ask_git_push() -> None:
     assert _decide("git", "push", "origin", "main").action is PolicyAction.ASK
 
@@ -57,8 +66,10 @@ def test_deny_sudo() -> None:
     assert d.action is PolicyAction.DENY
 
 
-def test_deny_rm() -> None:
-    assert _decide("rm", "-rf", "/").action is PolicyAction.DENY
+def test_ask_rm() -> None:
+    assert _decide("rm", "package-lock.json").action is PolicyAction.ASK
+    assert _decide("rm", "-rf", "build").action is PolicyAction.ASK
+    assert _decide("rmdir", "tmp").action is PolicyAction.ASK
 
 
 def test_deny_shell() -> None:

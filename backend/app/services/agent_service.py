@@ -10,6 +10,13 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable, Iterator
 
+from backend.app.agent.event_sink import (
+    AgentEventSink,
+    CompositeEventSink,
+    NullEventSink,
+    RecordingEventSink,
+)
+from backend.app.agent.events import AgentEvent
 from backend.app.agent.loop import DEFAULT_AGENT_SYSTEM_PROMPT, DEFAULT_MAX_STEPS, AgentLoop
 from backend.app.agent.state import AgentState, AgentStatus
 from backend.app.llm.client import LLMClient
@@ -18,6 +25,9 @@ from backend.app.llm.response import ToolCall
 from backend.app.persistence.agent_run_repository import AgentRunRepository
 from backend.app.persistence.conversation_repository import ConversationRepository
 from backend.app.persistence.store import SqliteStore
+from backend.app.permissions.decision import PermissionDecision
+from backend.app.permissions.handler import PermissionHandler
+from backend.app.permissions.request import PermissionRequest
 from backend.app.providers.errors import (
     InvalidModelError,
     UnknownModelError,
@@ -64,6 +74,8 @@ class AgentService:
         llm: LLMClient | None = None,
         llm_factory: LLMFactory | None = None,
         model_resolver: ModelResolver | None = None,
+        permission_handler: PermissionHandler | None = None,
+        event_sink: AgentEventSink | None = None,
         max_steps: int = DEFAULT_MAX_STEPS,
         system_prompt: str = DEFAULT_AGENT_SYSTEM_PROMPT,
     ) -> None:
@@ -73,6 +85,8 @@ class AgentService:
         self._llm = llm
         self._llm_factory = llm_factory
         self._model_resolver = model_resolver
+        self._permission_handler = permission_handler
+        self._event_sink: AgentEventSink = event_sink or NullEventSink()
         self._max_steps = max_steps
         self._system_prompt = system_prompt
         self.sessions = SessionService(store)
@@ -114,15 +128,18 @@ class AgentService:
             )
         return self._model_resolver
 
+    #列出所有供应商
     def list_providers(self) -> list[Provider]:
         return self.require_resolver().providers.list()
 
+    #列出所有模型
     def list_models(self, provider_id: str | None = None) -> list[Model]:
         resolver = self.require_resolver()
         if provider_id:
             return resolver.models.list_for_provider(provider_id)
         return resolver.models.list()
 
+    #切换会话模型
     def switch_session_model(
         self,
         session_id: str,
@@ -184,6 +201,7 @@ class AgentService:
             return current_provider_id, model_token
         raise UnknownModelError(f"未知模型: {model_token}")
 
+    
     def _resolve_runtime(self, session: Session) -> tuple[LLMClient, str, str]:
         """返回 (llm, provider_id, model_id)。优先级：llm_factory > model_resolver > llm。"""
         if self._llm_factory is not None:
@@ -209,7 +227,14 @@ class AgentService:
         finally:
             lock.release()
 
-    def run(self, session_id: str, content: str) -> AgentRunResult:
+    def run(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        event_sink: AgentEventSink | None = None,
+        permission_handler: PermissionHandler | None = None,
+    ) -> AgentRunResult:
         text = (content or "").strip()
         if not text:
             raise InvalidMessageError("消息内容不能为空")
@@ -217,9 +242,21 @@ class AgentService:
         session = self.sessions.get_session(session_id)
 
         with self._exclusive_session(session_id):
-            return self._run_locked(session, text)
+            return self._run_locked(
+                session,
+                text,
+                event_sink=event_sink,
+                permission_handler=permission_handler,
+            )
 
-    def _run_locked(self, session: Session, text: str) -> AgentRunResult:
+    def _run_locked(
+        self,
+        session: Session,
+        text: str,
+        *,
+        event_sink: AgentEventSink | None = None,
+        permission_handler: PermissionHandler | None = None,
+    ) -> AgentRunResult:
         try:
             workspace = Workspace(session.workspace)
         except WorkspaceError as exc:
@@ -227,7 +264,6 @@ class AgentService:
 
         conversation = self._conversations.load_conversation(session.session_id)
         persist_from = len(conversation.messages)
-        # 仅在全新空对话时写入 system；Resume 后已有 system，禁止重复追加
         if persist_from == 0 and not any(m.role == "system" for m in conversation.messages):
             conversation.add_system(self._system_prompt)
 
@@ -243,7 +279,68 @@ class AgentService:
             )
         )
 
-        registry = create_default_registry(workspace=workspace)
+        outer_sink: AgentEventSink = event_sink or self._event_sink
+        recorder = RecordingEventSink()
+        sink: AgentEventSink = CompositeEventSink(recorder, outer_sink)
+        handler = (
+            permission_handler
+            if permission_handler is not None
+            else self._permission_handler
+        )
+
+        def on_permission_wait(req: PermissionRequest) -> None:
+            self._runs.update_run_status(
+                run.agent_run_id,
+                AgentStatus.WAITING_PERMISSION.value,
+            )
+            sink.emit(
+                AgentEvent(
+                    event_type="permission_requested",
+                    step=0,
+                    tool_name=req.tool_name,
+                    metadata=req.to_dict(),
+                )
+            )
+
+        def on_permission_resolved(
+            req: PermissionRequest,
+            decision: PermissionDecision | None,
+        ) -> None:
+            self._runs.update_run_status(
+                run.agent_run_id,
+                AgentStatus.RUNNING.value,
+            )
+            sink.emit(
+                AgentEvent(
+                    event_type="permission_resolved",
+                    step=0,
+                    tool_name=req.tool_name,
+                    metadata={
+                        "request_id": req.request_id,
+                        "decision": decision.value if decision else "interrupted",
+                    },
+                )
+            )
+
+        def on_command_line(stream: str, line: str) -> None:
+            sink.emit(
+                AgentEvent(
+                    event_type="command_output_line",
+                    step=0,
+                    tool_name="run_command",
+                    metadata={"stream": stream, "line": line},
+                )
+            )
+
+        registry = create_default_registry(
+            workspace=workspace,
+            permission_handler=handler,
+            session_id=session.session_id,
+            agent_run_id=run.agent_run_id,
+            on_permission_wait=on_permission_wait if handler else None,
+            on_permission_resolved=on_permission_resolved if handler else None,
+            on_command_line=on_command_line,
+        )
         executor = ToolExecutor(registry)
         loop = AgentLoop(
             llm,
@@ -251,9 +348,18 @@ class AgentService:
             registry,
             max_steps=self._max_steps,
             system_prompt=self._system_prompt,
+            event_sink=sink,
         )
 
         state = loop.run(text, conversation=conversation)
+        # permission_* 仅经 sink 发出；用 recorder 对齐完整时间线到 state.events
+        # answer_delta 只服务实时 UI，不进入持久化轨迹
+        state.events = [
+            e
+            for e in recorder.events
+            if e.event_type
+            not in {"answer_delta", "answer_discard", "command_output_line"}
+        ]
 
         step_index_to_id, tool_call_to_step = self._persist_steps_and_tools(
             session=session,

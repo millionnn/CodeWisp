@@ -169,6 +169,31 @@ class AgentRunRepository:
             raise RepositoryError(f"完成 AgentRun 失败: {exc}") from exc
         return updated
 
+    def update_run_status(self, agent_run_id: str, status: str) -> AgentRun:
+        """更新运行中状态（如 waiting_permission），不写 completed_at。"""
+        current = self.get_run(agent_run_id)
+        try:
+            self._store.execute(
+                "UPDATE agent_runs SET status = ? WHERE id = ?",
+                (status, agent_run_id),
+            )
+            self._store.commit()
+        except sqlite3.Error as exc:
+            raise RepositoryError(f"更新 AgentRun 状态失败: {exc}") from exc
+        return AgentRun(
+            agent_run_id=current.agent_run_id,
+            session_id=current.session_id,
+            provider_id=current.provider_id,
+            model_id=current.model_id,
+            status=status,
+            termination_reason=current.termination_reason,
+            max_steps=current.max_steps,
+            final_answer=current.final_answer,
+            error=current.error,
+            created_at=current.created_at,
+            completed_at=current.completed_at,
+        )
+
 #添加一个agent工作步骤
     def add_step(self, step: AgentStep) -> AgentStep:
         self._ensure_session(step.session_id)

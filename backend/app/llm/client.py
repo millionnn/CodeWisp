@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,6 +30,9 @@ from backend.app.llm.response import LLMResponse, ToolCall
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-chat"
+
+# 无真实 stream 时（测试 Scripted 客户端）模拟推送的块大小
+_FALLBACK_DELTA_CHARS = 16
 
 
 @dataclass(frozen=True)
@@ -107,6 +111,138 @@ class LLMClient:
 
         return self._to_domain_response(response)
 
+    def chat_stream(
+        self,
+        conversation: Conversation,
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        on_text_delta: Callable[[str], None] | None = None,
+        on_text_discard: Callable[[], None] | None = None,
+    ) -> LLMResponse:
+        """流式调用。
+
+        - 尚未出现 tool_call 时：实时 ``on_text_delta``（真流式）
+        - 一旦出现 tool_call：调用 ``on_text_discard`` 清掉已推送的推测正文
+        - 无可用 SDK client 时回退 ``chat()`` + 分块重放
+        """
+        if len(conversation) == 0:
+            raise ConfigError("对话为空，无法向 LLM 发送请求。")
+
+        if self._client is None:
+            response = self.chat(conversation, tools=tools)
+            _replay_text_deltas(response, on_text_delta)
+            return response
+
+        request: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": conversation.to_api_messages(),
+            "stream": True,
+        }
+        if tools:
+            request["tools"] = tools
+            request["tool_choice"] = "auto"
+
+        try:
+            stream = self._client.chat.completions.create(**request)
+        except AuthenticationError as exc:
+            raise LLMRequestError(
+                "LLM 鉴权失败：请检查当前 Provider 对应的 API Key 是否有效"
+                "（DeepSeek→LLM_API_KEY；硅基流动→SILICONFLOW_API_KEY；"
+                "OpenAI→OPENAI_API_KEY）。"
+            ) from exc
+        except (APIConnectionError, APITimeoutError) as exc:
+            raise LLMNetworkError(
+                "无法连接 LLM API，请检查网络与 LLM_BASE_URL。"
+            ) from exc
+        except APIError as exc:
+            raise LLMRequestError(f"LLM API 请求失败：{exc.message}") from exc
+        except Exception as exc:  # noqa: BLE001
+            raise LLMRequestError(f"LLM 客户端发生未预期错误：{exc}") from exc
+
+        return self._consume_stream(
+            stream,
+            on_text_delta=on_text_delta,
+            on_text_discard=on_text_discard,
+        )
+
+    def _consume_stream(
+        self,
+        stream: Any,
+        *,
+        on_text_delta: Callable[[str], None] | None,
+        on_text_discard: Callable[[], None] | None = None,
+    ) -> LLMResponse:
+        content_parts: list[str] = []
+        tool_acc: dict[int, dict[str, Any]] = {}
+        finish_reason: str | None = None
+        saw_tool_calls = False
+        emitted_text = False
+
+        try:
+            for chunk in stream:
+                if not getattr(chunk, "choices", None):
+                    continue
+                choice = chunk.choices[0]
+                delta = getattr(choice, "delta", None)
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
+                if delta is None:
+                    continue
+
+                raw_tools = getattr(delta, "tool_calls", None) or []
+                if raw_tools:
+                    if not saw_tool_calls and emitted_text and on_text_discard is not None:
+                        on_text_discard()
+                        emitted_text = False
+                    saw_tool_calls = True
+                    for tc_delta in raw_tools:
+                        idx = int(getattr(tc_delta, "index", 0) or 0)
+                        slot = tool_acc.setdefault(
+                            idx,
+                            {"id": "", "name": "", "arguments": ""},
+                        )
+                        if getattr(tc_delta, "id", None):
+                            slot["id"] = str(tc_delta.id)
+                        function = getattr(tc_delta, "function", None)
+                        if function is not None:
+                            if getattr(function, "name", None):
+                                slot["name"] = str(function.name)
+                            if getattr(function, "arguments", None):
+                                slot["arguments"] += str(function.arguments)
+
+                piece = getattr(delta, "content", None)
+                if piece:
+                    content_parts.append(piece)
+                    # 真流式：未见 tool_call 前实时推送；出现工具后不再推正文
+                    if on_text_delta is not None and not saw_tool_calls:
+                        on_text_delta(piece)
+                        emitted_text = True
+        except LLMRequestError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise LLMRequestError(f"LLM 流式响应解析失败：{exc}") from exc
+
+        content = "".join(content_parts) if content_parts else None
+        tool_calls = tuple(
+            _map_tool_call_from_parts(
+                tool_acc[i]["id"],
+                tool_acc[i]["name"],
+                tool_acc[i]["arguments"],
+            )
+            for i in sorted(tool_acc)
+            if tool_acc[i]["name"] or tool_acc[i]["arguments"]
+        )
+
+        if (content is None or content == "") and not tool_calls:
+            raise LLMRequestError("LLM 返回了空内容。")
+
+        return LLMResponse(
+            content=content,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            raw_response=None,
+        )
+
     @staticmethod
     def _to_domain_response(response: Any) -> LLMResponse:
         """将厂商 SDK 响应映射为 LLMResponse。"""
@@ -130,6 +266,31 @@ class LLMClient:
             finish_reason=finish_reason,
             raw_response=response,
         )
+
+
+def _replay_text_deltas(
+    response: LLMResponse,
+    on_text_delta: Callable[[str], None] | None,
+) -> None:
+    if on_text_delta is None or response.has_tool_calls:
+        return
+    text = response.text
+    if not text:
+        return
+    size = _FALLBACK_DELTA_CHARS
+    for i in range(0, len(text), size):
+        on_text_delta(text[i : i + size])
+
+
+def _map_tool_call_from_parts(call_id: str, name: str, arguments_raw: str) -> ToolCall:
+    arguments, raw, parse_error = _parse_tool_arguments(arguments_raw or "")
+    return ToolCall(
+        id=call_id,
+        name=name,
+        arguments=arguments,
+        arguments_raw=raw,
+        parse_error=parse_error,
+    )
 
 
 def _map_tool_call(tc: Any) -> ToolCall:

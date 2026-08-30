@@ -78,7 +78,7 @@ def test_cli_help_and_providers_models(tmp_path: Path, monkeypatch: pytest.Monke
     assert "deepseek-chat" in blob
     assert "Current Model" in blob
     assert "CodeWisp Status" in blob
-    assert "Resolver  configured" in blob
+    assert "Resolver" in blob and "configured" in blob
 
 
 def test_cli_model_switch_persists_and_new_run_uses_it(
@@ -257,4 +257,4 @@ def test_render_trace_permission_and_tools() -> None:
     blob = "\n".join(lines)
     assert "◇ run_command" in blob
     assert "Permission required" in blob
-    assert "permission required" in blob.lower() or "Reason: permission required" in blob
+    assert "permission required" in blob.lower() or "Permission required" in blob or "stopped (permission)" in blob

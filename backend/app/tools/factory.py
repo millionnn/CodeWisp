@@ -28,6 +28,12 @@ def create_default_registry(
     workspace_root: str | Path | None = None,
     execution_service: ExecutionService | None = None,
     command_policy: CommandPolicy | None = None,
+    permission_handler: object | None = None,
+    session_id: str | None = None,
+    agent_run_id: str | None = None,
+    on_permission_wait: object | None = None,
+    on_permission_resolved: object | None = None,
+    on_command_line: object | None = None,
 ) -> ToolRegistry:
     """创建并注册内置工具（只读 / 写入 / 受控执行）。
 
@@ -53,7 +59,18 @@ def create_default_registry(
 
     service = execution_service if execution_service is not None else ExecutionService(ws)
     policy = command_policy if command_policy is not None else CommandPolicy()
-    registry.register(RunCommandTool(service, policy))
+    registry.register(
+        RunCommandTool(
+            service,
+            policy,
+            permission_handler=permission_handler,  # type: ignore[arg-type]
+            session_id=session_id,
+            agent_run_id=agent_run_id,
+            on_permission_wait=on_permission_wait,
+            on_permission_resolved=on_permission_resolved,
+            on_command_line=on_command_line,
+        )
+    )
     return registry
 
 
@@ -63,6 +80,7 @@ def create_default_executor(
     workspace_root: str | Path | None = None,
     execution_service: ExecutionService | None = None,
     command_policy: CommandPolicy | None = None,
+    permission_handler: object | None = None,
 ) -> ToolExecutor:
     """创建绑定默认注册表的执行器。"""
     return ToolExecutor(
@@ -71,5 +89,6 @@ def create_default_executor(
             workspace_root=workspace_root,
             execution_service=execution_service,
             command_policy=command_policy,
+            permission_handler=permission_handler,
         )
     )

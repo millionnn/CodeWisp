@@ -1,10 +1,10 @@
-"""CodeWisp 命令行界面（V0.7 Phase 3）。
+"""CodeWisp 命令行界面（V0.8）。
 
 ```text
-CLI → AgentService / SessionService → ModelResolver → AgentLoop
+CLI → AgentService / SessionService → PermissionHandler / EventSink → AgentLoop
 ```
 
-CLI 只做输入、命令解析、状态与 AgentEvent 展示；不实现 Agent Core、不直连 SQLite。
+CLI 只做输入、命令解析、交互授权与实时 AgentEvent 展示；不实现 Agent Core、不直连 SQLite。
 """
 
 from __future__ import annotations
@@ -14,9 +14,13 @@ from pathlib import Path
 
 from backend.app.agent.state import AgentStatus
 from backend.app.banner import print_app_banner
-from backend.app.cli.help_text import HELP_TEXT
-from backend.app.cli.trace import render_agent_trace
+from backend.app.cli.event_sink import CliEventSink
+from backend.app.cli.help_text import HELP_TEXT, HELP_TEXT_PLAIN
+from backend.app.cli.render_md import render_markdown
+from backend.app.cli.theme import get_theme, make_console
+from backend.app.cli.trace import render_agent_trace, render_run_summary
 from backend.app.llm.errors import CodeWispError
+from backend.app.permissions.cli import CliPermissionHandler
 from backend.app.providers.defaults import DEFAULT_MODEL_ID, DEFAULT_PROVIDER_ID
 from backend.app.providers.errors import ModelError, ProviderError
 from backend.app.services.agent_service import AgentService
@@ -62,29 +66,44 @@ def _print_run_result(
     *,
     output_fn: Callable[[str], None],
     show_tool_trace: bool,
+    live_trace: bool = False,
+    answer_already_streamed: bool = False,
 ) -> None:
     from backend.app.services.agent_service import AgentRunResult
 
     assert isinstance(result, AgentRunResult)
     state = result.state
 
-    if show_tool_trace:
+    if show_tool_trace and not live_trace:
         render_agent_trace(state, result.run, output_fn=output_fn)
+    elif live_trace:
+        render_run_summary(state, result.run, output_fn=output_fn)
 
     if state.status == AgentStatus.COMPLETED:
-        output_fn(f"\nCodeWisp:\n{state.final_answer}\n")
+        if not answer_already_streamed:
+            if output_fn is print and get_theme().rich_enabled:
+                render_markdown(state.final_answer or "")
+            elif output_fn is print:
+                output_fn(f"\nCodeWisp:\n{state.final_answer}\n")
+            else:
+                output_fn("\nCodeWisp:")
+                render_markdown(
+                    state.final_answer or "",
+                    output_fn=output_fn,
+                    force_plain=True,
+                )
     elif state.status == AgentStatus.MAX_STEPS:
         output_fn("\nCodeWisp:\n（已达最大步数 / 迭代预算耗尽）")
         if state.error:
             output_fn(state.error)
-        if state.final_answer:
+        if state.final_answer and not answer_already_streamed:
             output_fn(state.final_answer)
         output_fn("")
     elif state.status == AgentStatus.PERMISSION_REQUIRED:
         output_fn("\nCodeWisp:\n（需要用户授权，已停止自动继续）")
         if state.error:
             output_fn(state.error)
-        if state.final_answer:
+        if state.final_answer and not answer_already_streamed:
             output_fn(state.final_answer)
         output_fn("")
     elif state.status == AgentStatus.FAILED:
@@ -170,6 +189,10 @@ def run_cli(
         output_fn=output_fn,
     )
 
+    # V0.8：交互授权 + 实时 EventSink（CLI 实现；AgentLoop 不感知 UI）
+    permission_handler = CliPermissionHandler(input_fn=input_fn, output_fn=output_fn)
+    live_sink = CliEventSink(output_fn=output_fn, model_id=current.model_id)
+
     while True:
         user_text = input_fn("> ")
         if user_text is None:
@@ -189,7 +212,10 @@ def run_cli(
             return 0
 
         if lower in {"/help", "help"}:
-            output_fn(HELP_TEXT)
+            if output_fn is print and get_theme().rich_enabled:
+                make_console().print(HELP_TEXT)
+            else:
+                output_fn(HELP_TEXT_PLAIN)
             continue
 
         if lower == "/sessions":
@@ -218,6 +244,7 @@ def run_cli(
 
         if lower == "/model" or lower.startswith("/model "):
             current = _cmd_model(agents, current, user_text, output_fn)
+            live_sink.set_model_id(current.model_id)
             continue
 
         if lower.startswith("/new"):
@@ -252,6 +279,7 @@ def run_cli(
             except SessionError as exc:
                 output_fn(f"错误：{exc}")
                 continue
+            live_sink.set_model_id(current.model_id)
             output_fn(
                 f"已创建 Session: {current.session_id} ({current.title})\n"
                 f"Model: {current.provider_id}/{current.model_id}"
@@ -274,6 +302,7 @@ def run_cli(
                 continue
             _discard_unused_session(agents, current, output_fn=output_fn)
             current = nxt
+            live_sink.set_model_id(current.model_id)
             output_fn(
                 f"已切换到 Session: {current.session_id} ({current.title})\n"
                 f"Model: {current.provider_id}/{current.model_id}\n"
@@ -311,6 +340,7 @@ def run_cli(
                 except SessionError as exc:
                     output_fn(f"错误：无法创建替代 Session：{exc}")
                     return 1
+                live_sink.set_model_id(current.model_id)
                 output_fn(
                     f"已切换到新 Session: {current.session_id} ({current.title})"
                 )
@@ -320,14 +350,28 @@ def run_cli(
             output_fn("未知命令。输入 /help 查看可用命令。")
             continue
 
+        live_sink.set_model_id(current.model_id)
         try:
-            result = agents.run(current.session_id, user_text)
+            # 每轮任务重置实时 sink，避免跨 run 累加
+            live_sink = CliEventSink(output_fn=output_fn, model_id=current.model_id)
+            result = agents.run(
+                current.session_id,
+                user_text,
+                event_sink=live_sink if show_tool_trace else None,
+                permission_handler=permission_handler,
+            )
             current = result.session
         except CodeWispError as exc:
             output_fn(f"错误：{exc}")
             continue
 
-        _print_run_result(result, output_fn=output_fn, show_tool_trace=show_tool_trace)
+        _print_run_result(
+            result,
+            output_fn=output_fn,
+            show_tool_trace=show_tool_trace,
+            live_trace=show_tool_trace,
+            answer_already_streamed=live_sink.answer_streamed,
+        )
 
     return 0  # pragma: no cover
 
@@ -397,10 +441,26 @@ def _cmd_history(
         output_fn("（暂无用户与助手对话）")
         return
 
+    use_rich = output_fn is print and get_theme().rich_enabled
     for msg in visible:
-        label = "你" if msg.role == "user" else "CodeWisp"
-        output_fn(f"\n[{label}]")
-        output_fn(msg.content or "")
+        if msg.role == "user":
+            if use_rich:
+                make_console().print(f"\n[cw.user]你[/]")
+                make_console().print(msg.content or "", style="cw.dim")
+            else:
+                output_fn("\n[你]")
+                output_fn(msg.content or "")
+        else:
+            if use_rich:
+                make_console().print()
+                render_markdown(msg.content or "")
+            else:
+                output_fn("\n[CodeWisp]")
+                render_markdown(
+                    msg.content or "",
+                    output_fn=output_fn,
+                    force_plain=True,
+                )
 
 
 def _cmd_providers(
@@ -532,24 +592,43 @@ def _cmd_status(
     except Exception:  # noqa: BLE001 — status 兜底
         tool_count = 0
 
+    runs = agents.sessions.list_runs(current.session_id)
+    last_run = runs[-1] if runs else None
+    run_status = last_run.status if last_run else "ready"
+    perm_status = "interactive (CLI)"
+    if run_status == AgentStatus.WAITING_PERMISSION.value:
+        perm_status = "waiting for user decision"
+
+    theme = get_theme()
+    rows = [
+        ("Session ID", current.session_id),
+        ("Title", current.title),
+        ("Workspace", current.workspace),
+        ("Provider", current.provider_id),
+        ("Model", current.model_id),
+        ("Run status", run_status),
+        ("Permission", perm_status),
+        ("Max steps", str(agents.max_steps)),
+        ("Tools", str(tool_count)),
+        ("Database", str(agents.db_path)),
+        (
+            "Resolver",
+            "configured" if agents.model_resolver is not None else "fixed llm",
+        ),
+        ("Theme", f"{theme.name} · color={'on' if theme.color else 'off'}"),
+    ]
+
+    if output_fn is print and theme.rich_enabled:
+        from rich.table import Table
+
+        table = Table(title="CodeWisp Status", show_header=False, box=None, padding=(0, 2))
+        table.add_column("k", style="cw.key")
+        table.add_column("v", style="cw.value")
+        for k, v in rows:
+            table.add_row(k, v)
+        make_console().print(table)
+        return
+
     output_fn("CodeWisp Status\n")
-    output_fn("Session")
-    output_fn(f"  ID        {current.session_id}")
-    output_fn(f"  Title     {current.title}")
-    output_fn(f"  Workspace {current.workspace}")
-    output_fn("")
-    output_fn("Model")
-    output_fn(f"  Provider  {current.provider_id}")
-    output_fn(f"  Model     {current.model_id}")
-    output_fn("")
-    output_fn("Agent")
-    output_fn("  Status    ready")
-    output_fn(f"  Max Steps {agents.max_steps}")
-    output_fn("")
-    output_fn("Runtime")
-    output_fn(f"  Tools     {tool_count}")
-    output_fn(f"  Database  {agents.db_path}")
-    if agents.model_resolver is not None:
-        output_fn("  Resolver  configured")
-    else:
-        output_fn("  Resolver  (fixed llm / no ModelResolver)")
+    for k, v in rows:
+        output_fn(f"  {k:<12} {v}")

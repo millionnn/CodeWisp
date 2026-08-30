@@ -1,5 +1,39 @@
 # 开发日志
 
+## V0.8 Interactive Permission + Live Agent Event
+
+**日期：** 2026-08-30
+
+### 目标
+
+把 CodeWisp 从「可运行 Coding Agent」提升为具有实时交互能力的 Runtime：Interactive Permission + Live EventSink；为未来 Web UI / SSE 保留接口边界。不实现 Web UI / Diff / Snapshot。
+
+### 已完成
+
+- Permission domain：`PermissionRequest` / `PermissionDecision` / `PermissionHandler` / `CliPermissionHandler` / `PendingPermissionBroker`
+- ASK → Handler → ALLOW 执行 / DENY observation；Policy DENY 仍不询问；无 Handler 保持 V0.7 硬停
+- EventSink：`AgentEventSink` + CLI 实时 Trace；`AgentService.run(..., event_sink=, permission_handler=)`
+- AgentRun `waiting_permission` 投影（由 AgentService 更新，Handler 不写库）
+- FastAPI：providers/models、permissions pending/decide、messages 响应含 `events`
+- 测试：permission domain / CLI / integration / event_sink / API
+
+### 设计决策
+
+1. Policy 只决定「要不要问」；Handler 只决定「用户允不允许」
+2. AgentLoop 不 `input()`，不知 CLI/Web
+3. EventSink 是 runtime delivery，不新增 events 表
+4. CLI 与 API 共用 AgentService，CLI 不经 localhost HTTP
+
+### 测试结果
+
+`pytest`：**324 passed**（V0.7 基线 297 + V0.8 新增）
+
+### 后续
+
+V0.9 建议：Web UI Foundation、SSE EventSink、异步 Permission 体验优化。
+
+---
+
 ## V0.7 Phase 3
 
 **日期：** 2026-08-30

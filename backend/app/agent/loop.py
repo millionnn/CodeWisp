@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 from backend.app.agent.errors import AgentError
+from backend.app.agent.event_sink import AgentEventSink, NullEventSink
 from backend.app.agent.events import AgentEvent
 from backend.app.agent.state import AgentState, AgentStatus
 from backend.app.llm.client import LLMClient
@@ -32,8 +33,11 @@ DEFAULT_AGENT_SYSTEM_PROMPT = (
     "需要外部信息或仓库操作时调用相应工具，并依据工具返回的结果（Observation）决定下一步——"
     "可以继续调用工具，或在任务已完成后给出最终回答。"
     "若你修改了代码或配置，应通过合适的检查或命令验证结果；验证已通过则停止，不要无意义地重复同一操作。"
-    "若工具返回需要用户授权（permission_required），请停止自动继续操作并说明原因，"
-    "不要尝试绕过权限策略或未授权执行。"
+    "若工具返回 permission_required（尚无交互授权通道），请停止自动继续并说明原因。"
+    "若工具返回用户拒绝执行（user_denied / DENY），请根据 Observation 调整计划或向用户说明，"
+    "不要尝试绕过权限策略。"
+    "不要用 python/perl 等解释器去绕过被拒绝或需授权的命令（例如不要用 os.remove 代替 rm）。"
+    "删除文件应使用 run_command 的 rm，并等待用户授权；不要寻找变通执行路径。"
     "不要声称使用了未提供的能力，也不要虚构未实际调用的工具结果。"
     "可用步数有限，请高效完成任务。"
 )
@@ -50,6 +54,7 @@ class AgentLoop:
         *,
         max_steps: int = DEFAULT_MAX_STEPS,
         system_prompt: str = DEFAULT_AGENT_SYSTEM_PROMPT,
+        event_sink: AgentEventSink | None = None,
     ) -> None:
         if max_steps < 1:
             raise AgentError("max_steps 必须 >= 1")
@@ -58,6 +63,7 @@ class AgentLoop:
         self.registry = registry
         self.max_steps = max_steps
         self.system_prompt = system_prompt
+        self._event_sink: AgentEventSink = event_sink or NullEventSink()
 
     def run(
         self,
@@ -87,7 +93,7 @@ class AgentLoop:
             max_steps=self.max_steps,
             conversation=conv,
         )
-        self._emit(state, "agent_started", 0, metadata={"task": text})
+        self._emit_event(state, "agent_started", 0, metadata={"task": text})
         conv.add_user(text)
 
         tools = self.registry.list_schemas()
@@ -95,8 +101,14 @@ class AgentLoop:
         try:
             for step in range(1, self.max_steps + 1):
                 state.step = step
+                self._emit_event(
+                    state,
+                    "llm_started",
+                    step,
+                    metadata={"model_id": getattr(self.llm.config, "model", None)},
+                )
                 response = self._call_llm(state, conv, tools)
-                self._emit(
+                self._emit_event(
                     state,
                     "llm_called",
                     step,
@@ -112,7 +124,7 @@ class AgentLoop:
                     state.final_answer = answer
                     state.status = AgentStatus.COMPLETED
                     state.termination_reason = "completed"
-                    self._emit(
+                    self._emit_event(
                         state,
                         "agent_completed",
                         step,
@@ -136,7 +148,7 @@ class AgentLoop:
                             result.error
                             or "工具返回 permission_required，已停止自动继续。"
                         )
-                        self._emit(
+                        self._emit_event(
                             state,
                             "permission_required",
                             step,
@@ -147,7 +159,7 @@ class AgentLoop:
                                 "arguments": tool_call.arguments,
                             },
                         )
-                        self._emit(
+                        self._emit_event(
                             state,
                             "agent_completed",
                             step,
@@ -165,7 +177,7 @@ class AgentLoop:
             state.error = (
                 f"已达到最大步数 {self.max_steps}（迭代预算耗尽），Agent 停止。"
             )
-            self._emit(
+            self._emit_event(
                 state,
                 "agent_completed",
                 state.step,
@@ -180,7 +192,7 @@ class AgentLoop:
             state.status = AgentStatus.FAILED
             state.termination_reason = "failed"
             state.error = str(exc)
-            self._emit(
+            self._emit_event(
                 state,
                 "agent_completed",
                 state.step,
@@ -195,7 +207,7 @@ class AgentLoop:
             state.status = AgentStatus.FAILED
             state.termination_reason = "failed"
             state.error = f"Agent 运行失败：{exc}"
-            self._emit(
+            self._emit_event(
                 state,
                 "agent_completed",
                 state.step,
@@ -213,6 +225,33 @@ class AgentLoop:
         conversation: Conversation,
         tools: list[dict[str, Any]],
     ) -> LLMResponse:
+        def on_text_delta(delta: str) -> None:
+            self._event_sink.emit(
+                AgentEvent(
+                    event_type="answer_delta",
+                    step=state.step,
+                    metadata={"delta": delta},
+                )
+            )
+
+        def on_text_discard() -> None:
+            # 本回合随后转为 tool_calls：清掉已流式的推测正文
+            self._event_sink.emit(
+                AgentEvent(
+                    event_type="answer_discard",
+                    step=state.step,
+                    metadata={},
+                )
+            )
+
+        chat_stream = getattr(self.llm, "chat_stream", None)
+        if callable(chat_stream):
+            return chat_stream(
+                conversation,
+                tools=tools,
+                on_text_delta=on_text_delta,
+                on_text_discard=on_text_discard,
+            )
         return self.llm.chat(conversation, tools=tools)
 
     def _handle_tool_call(
@@ -222,7 +261,7 @@ class AgentLoop:
         tool_call: ToolCall,
         step: int,
     ) -> ToolResult:
-        self._emit(
+        self._emit_event(
             state,
             "tool_called",
             step,
@@ -252,7 +291,7 @@ class AgentLoop:
             result = self.executor.execute(tool_call.name, tool_call.arguments)
 
         event_type = "tool_completed" if result.success else "tool_failed"
-        self._emit(
+        self._emit_event(
             state,
             event_type,
             step,
@@ -270,8 +309,8 @@ class AgentLoop:
         """将 ToolResult 转为模型可读的 observation 文本。"""
         return json.dumps(result.to_dict(), ensure_ascii=False)
 
-    @staticmethod
-    def _emit(
+    def _emit_event(
+        self,
         state: AgentState,
         event_type: str,
         step: int,
@@ -279,21 +318,19 @@ class AgentLoop:
         tool_name: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        state.events.append(
-            AgentEvent(
-                event_type=event_type,
-                step=step,
-                tool_name=tool_name,
-                metadata=metadata or {},
-            )
+        event = AgentEvent(
+            event_type=event_type,
+            step=step,
+            tool_name=tool_name,
+            metadata=metadata or {},
         )
+        state.events.append(event)
+        self._event_sink.emit(event)
 
 
 def _is_permission_required(result: ToolResult) -> bool:
-    """检测工具是否返回了 ASK / permission_required（框架硬停，不自动授权）。"""
+    """无交互 Handler 时的硬停信号：仅当明确 permission_required。"""
     if result.metadata.get("permission_required") is True:
-        return True
-    if result.metadata.get("policy_action") == "ask":
         return True
     output = result.output
     if isinstance(output, dict) and output.get("permission_required") is True:

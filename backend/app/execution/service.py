@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import subprocess
+import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 from backend.app.execution.errors import InvalidExecutionRequestError
@@ -13,6 +15,8 @@ from backend.app.workspace.errors import PathOutsideWorkspaceError, WorkspaceErr
 from backend.app.workspace.workspace import Workspace
 
 DEFAULT_MAX_OUTPUT_CHARS = 50_000
+
+LineCallback = Callable[[str, str], None]  # (stream, line)
 
 
 class ExecutionService:
@@ -39,8 +43,16 @@ class ExecutionService:
     def workspace(self) -> Workspace:
         return self._workspace
 
-    def run(self, request: ExecutionRequest) -> ExecutionResult:
-        """执行请求并返回结构化结果。"""
+    def run(
+        self,
+        request: ExecutionRequest,
+        *,
+        on_line: LineCallback | None = None,
+    ) -> ExecutionResult:
+        """执行请求并返回结构化结果。
+
+        ``on_line(stream, line)``：可选，按行回调 stdout/stderr（不含换行符）。
+        """
         started = time.perf_counter()
         try:
             request.validate()
@@ -88,8 +100,37 @@ class ExecutionService:
         argv = request.argv()
         env = dict(request.env) if request.env is not None else None
 
+        if on_line is None:
+            return self._run_buffered(
+                request,
+                argv=argv,
+                cwd_path=cwd_path,
+                cwd_display=cwd_display,
+                env=env,
+                started=started,
+            )
+        return self._run_streaming(
+            request,
+            argv=argv,
+            cwd_path=cwd_path,
+            cwd_display=cwd_display,
+            env=env,
+            started=started,
+            on_line=on_line,
+        )
+
+    def _run_buffered(
+        self,
+        request: ExecutionRequest,
+        *,
+        argv: list[str],
+        cwd_path: Any,
+        cwd_display: str,
+        env: dict[str, str] | None,
+        started: float,
+    ) -> ExecutionResult:
         try:
-            completed = subprocess.run(  # noqa: S603 — 有意：无 shell，argv 列表
+            completed = subprocess.run(  # noqa: S603
                 argv,
                 cwd=str(cwd_path),
                 capture_output=True,
@@ -134,7 +175,7 @@ class ExecutionService:
                 cwd=cwd_display,
                 metadata={"error_type": "os_error"},
             )
-        except Exception as exc:  # noqa: BLE001 — 边界：未知异常结构化
+        except Exception as exc:  # noqa: BLE001
             return self._failure_result(
                 request,
                 error=f"执行异常：{exc}",
@@ -158,6 +199,99 @@ class ExecutionService:
             timed_out=False,
             truncated=trunc_out or trunc_err,
             metadata={},
+        )
+
+    def _run_streaming(
+        self,
+        request: ExecutionRequest,
+        *,
+        argv: list[str],
+        cwd_path: Any,
+        cwd_display: str,
+        env: dict[str, str] | None,
+        started: float,
+        on_line: LineCallback,
+    ) -> ExecutionResult:
+        try:
+            proc = subprocess.Popen(  # noqa: S603
+                argv,
+                cwd=str(cwd_path),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+            )
+        except FileNotFoundError:
+            return self._failure_result(
+                request,
+                error=f"命令不存在或无法执行：{request.command}",
+                started=started,
+                cwd=cwd_display,
+                metadata={"error_type": "command_not_found"},
+            )
+        except OSError as exc:
+            return self._failure_result(
+                request,
+                error=f"执行失败：{exc}",
+                started=started,
+                cwd=cwd_display,
+                metadata={"error_type": "os_error"},
+            )
+
+        stdout_chunks: list[str] = []
+        stderr_chunks: list[str] = []
+
+        def _reader(stream: Any, name: str, bucket: list[str]) -> None:
+            assert stream is not None
+            for line in stream:
+                bucket.append(line)
+                on_line(name, line.rstrip("\n"))
+
+        t_out = threading.Thread(
+            target=_reader, args=(proc.stdout, "stdout", stdout_chunks), daemon=True
+        )
+        t_err = threading.Thread(
+            target=_reader, args=(proc.stderr, "stderr", stderr_chunks), daemon=True
+        )
+        t_out.start()
+        t_err.start()
+
+        timed_out = False
+        try:
+            proc.wait(timeout=request.timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+
+        t_out.join(timeout=5)
+        t_err.join(timeout=5)
+
+        stdout, trunc_out = self._clip("".join(stdout_chunks))
+        stderr, trunc_err = self._clip("".join(stderr_chunks))
+        if timed_out and not stderr:
+            stderr = f"命令超时（>{request.timeout}s）。"
+
+        exit_code = None if timed_out else int(proc.returncode or 0)
+        return ExecutionResult(
+            success=(not timed_out) and exit_code == 0,
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            duration_ms=self._elapsed_ms(started),
+            command=request.command,
+            args=list(request.args),
+            cwd=cwd_display,
+            timed_out=timed_out,
+            truncated=trunc_out or trunc_err,
+            metadata={"error_type": "timeout", "timeout": request.timeout}
+            if timed_out
+            else {},
         )
 
     def _clip(self, text: str) -> tuple[str, bool]:

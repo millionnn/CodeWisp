@@ -1,5 +1,5 @@
 """API routes 包。"""
 
-from backend.app.api.routes import messages, sessions
+from backend.app.api.routes import messages, permissions, providers, sessions
 
-__all__ = ["messages", "sessions"]
+__all__ = ["messages", "permissions", "providers", "sessions"]

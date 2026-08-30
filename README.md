@@ -79,7 +79,9 @@ codewisp --db ~/.codewisp/demo.db   # 可选：指定 SQLite 路径
 ```
 
 CLI 命令：`/help` `/sessions` `/session` `/new` `/use` `/history` `/providers` `/models` `/model` `/status` `/delete` `/exit`。
-普通输入经 **AgentService → ModelResolver → AgentLoop** 执行并持久化；工具轨迹由 AgentEvent 展示。
+普通输入经 **AgentService → ModelResolver → AgentLoop** 执行并持久化；工具轨迹实时展示；最终回答 **流式纯文本 + 结束后 Markdown 重绘**（Rich）；ASK 经 **CliPermissionHandler**。
+
+可选环境变量：`NO_COLOR=1` 关闭颜色；`CODEWISP_THEME=mono` 强制纯文本。
 
 Workspace 解析优先级：`--workspace` / `-w` > `CODEWISP_WORKSPACE` > **cwd**。  
 注意：Workspace 是 Agent 要操作的项目，不是 CodeWisp 源码目录。
@@ -103,6 +105,10 @@ PATCH  /api/sessions/{id}
 DELETE /api/sessions/{id}
 GET    /api/sessions/{id}/messages
 POST   /api/sessions/{id}/messages
+GET    /api/sessions/{id}/permissions/pending
+POST   /api/sessions/{id}/permissions/decide
+GET    /api/providers
+GET    /api/models?provider_id=
 ```
 
 示例任务：
@@ -122,20 +128,20 @@ pytest
 
 CodeWisp 是从零实现的编程智能体（Coding Agent）：面向自然语言编程任务，目标能力包括探索代码仓库、读写与修改代码、执行本地命令与测试，并根据结果迭代修复。实现上不封装 Claude Code / Codex 等现成产品，也不使用 LangChain、LlamaIndex、OpenAI Agents SDK、Claude Agent SDK、AutoGen、CrewAI 等 Agent 框架；对话历史、工具定义与本地执行、模型输出解析、循环终止与错误处理等关键逻辑自行编写。模型侧使用厂商官方或 OpenAI 兼容 API（当前默认对接 DeepSeek），凭据仅通过环境变量 / 未入库配置提供。
 
-### 当前能力（V0.6 + V0.7 Phase 1–3）
+### 当前能力（V0.8）
 
 - **Coding Tools：** `list_files` / `glob` / `read_file` / `search_code` / `edit_file` / `write_file`
-- **受控执行：** `run_command`（ALLOW / ASK / DENY）
+- **受控执行：** `run_command`（Policy ALLOW / ASK / DENY）
+- **Interactive Permission：** ASK → PermissionHandler → ALLOW/DENY；CLI 与 API Broker
+- **Live Agent Event：** EventSink 实时投递；CLI 实时 Trace
 - **Self-Correction：** Observation 驱动有限迭代（LLM-driven，无语言特判）
 - **Session + SQLite 持久化：** Conversation / AgentRun / AgentStep / ToolCall；进程重启可恢复
-- **Provider / Model Domain + Registry（Phase 1）**
-- **ModelResolver + Session Runtime（Phase 2）**
-- **CLI Model / Provider UX + AgentEvent 轨迹（Phase 3）：** `/providers` `/models` `/model` `/status` `/help`；工具调用可视化；PermissionRequired 展示
+- **Provider / Model Domain + ModelResolver + CLI Model UX**
 - **Backend API + CLI** 共用 `AgentService`（CLI 不直连 SQLite / 不自建 Loop）
 
 ### 当前不支持
 
-交互式 Permission UI（Allow/Deny）、Web UI、Streaming / SSE / WebSocket、Snapshot / Diff / Undo、Context Compression、Planning、LSP。
+Web UI、完整 SSE / WebSocket 推送、Snapshot / Diff / Undo、Context Compression、Planning、LSP、MCP。
 
 可选：单独验证工具系统（无需 API Key）：
 

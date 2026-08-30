@@ -63,7 +63,7 @@ def build_default_model_registry() -> ModelRegistry:
             display_name="DeepSeek Chat",
             context_window=64_000,
             supports_tool_call=True,
-            supports_streaming=False,
+            supports_streaming=True,
         )
     )
     # openai 身份：ModelResolver 可解析；凭据走 OPENAI_API_KEY 或 LLM_API_KEY。
@@ -74,7 +74,7 @@ def build_default_model_registry() -> ModelRegistry:
             display_name="GPT-4o",
             context_window=128_000,
             supports_tool_call=True,
-            supports_streaming=False,
+            supports_streaming=True,
         )
     )
     registry.register(
@@ -84,7 +84,7 @@ def build_default_model_registry() -> ModelRegistry:
             display_name="GPT-4o mini",
             context_window=128_000,
             supports_tool_call=True,
-            supports_streaming=False,
+            supports_streaming=True,
         )
     )
     registry.register(
@@ -94,7 +94,7 @@ def build_default_model_registry() -> ModelRegistry:
             display_name="Qwen3.5 4B (SiliconFlow)",
             context_window=32_768,
             supports_tool_call=True,
-            supports_streaming=False,
+            supports_streaming=True,
         )
     )
     return registry
