@@ -1,6 +1,10 @@
 """CodeWisp 程序入口。
 
-组装：配置 → 解析目标 Workspace → LLMClient → Tool System → AgentLoop → CLI。
+组装：配置 → Workspace → SQLite → LLMClient → AgentService → CLI。
+
+```text
+CLI → AgentService → SessionService → AgentLoop
+```
 
 Workspace 来自「打开的目标项目」，不是 CodeWisp 安装目录。
 """
@@ -8,25 +12,30 @@ Workspace 来自「打开的目标项目」，不是 CodeWisp 安装目录。
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from backend.app.agent.loop import AgentLoop
 from backend.app.cli.interface import run_cli
 from backend.app.llm.client import LLMClient, LLMConfig
 from backend.app.llm.errors import CodeWispError, ConfigError
-from backend.app.tools.executor import ToolExecutor
-from backend.app.tools.factory import create_default_registry
+from backend.app.persistence.paths import default_db_path
+from backend.app.persistence.store import SqliteStore
+from backend.app.services.agent_service import AgentService
 from backend.app.workspace.errors import WorkspaceError
 from backend.app.workspace.resolve import resolve_workspace_root
 
 
 def _load_env() -> None:
-    """若 CodeWisp 仓库根存在 .env 则加载（仅加载配置，不代表 Workspace）。"""
+    """加载 LLM 等配置（不代表 Workspace）。
+
+    顺序：仓库根 ``.env`` → ``~/.codewisp/.env``（后加载不覆盖已有环境变量）。
+    """
     codewisp_root = Path(__file__).resolve().parents[2]
     load_dotenv(codewisp_root / ".env")
+    load_dotenv(Path.home() / ".codewisp" / ".env")
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -50,7 +59,41 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=None,
         help="Agent 迭代预算（每次 LLM 调用计 1 步）。省略时使用默认值。",
     )
+    parser.add_argument(
+        "--db",
+        default=None,
+        help="SQLite 数据库路径。省略时：CODEWISP_DB → ~/.codewisp/codewisp.db",
+    )
+    parser.add_argument(
+        "--session",
+        default=None,
+        help="恢复已有 Session ID（续跑）。省略则创建新 Session。",
+    )
+    parser.add_argument(
+        "--title",
+        default="CLI Session",
+        help="新建 Session 的标题（默认: CLI Session）。",
+    )
+    parser.add_argument(
+        "--provider-id",
+        default=None,
+        help="Session provider_id（默认 deepseek；仅记录身份，V0.6 不切换 SDK）。",
+    )
+    parser.add_argument(
+        "--model-id",
+        default=None,
+        help="Session model_id（默认取 LLM_MODEL 或 deepseek-chat）。",
+    )
     return parser.parse_args(argv)
+
+
+def _resolve_db_path(explicit: str | None) -> Path:
+    if explicit:
+        return Path(explicit).expanduser()
+    env = (os.getenv("CODEWISP_DB") or "").strip()
+    if env:
+        return Path(env).expanduser()
+    return default_db_path()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -58,16 +101,31 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     _load_env()
 
+    store: SqliteStore | None = None
     try:
         workspace_root = resolve_workspace_root(explicit=args.workspace)
         config = LLMConfig.from_env()
         client = LLMClient(config)
-        registry = create_default_registry(workspace_root=workspace_root)
-        executor = ToolExecutor(registry)
-        loop_kwargs: dict = {}
+        db_path = _resolve_db_path(args.db)
+        store = SqliteStore(db_path)
+        store.connect()
+
+        loop_kwargs: dict = {"llm": client}
         if args.max_steps is not None:
             loop_kwargs["max_steps"] = args.max_steps
-        agent = AgentLoop(client, executor, registry, **loop_kwargs)
+        agents = AgentService(store, **loop_kwargs)
+
+        provider_id = (args.provider_id or "deepseek").strip()
+        model_id = (args.model_id or config.model or "deepseek-chat").strip()
+
+        return run_cli(
+            agents,
+            workspace_root=workspace_root,
+            session_id=args.session,
+            session_title=args.title,
+            provider_id=provider_id,
+            model_id=model_id,
+        )
     except ConfigError as exc:
         print(f"配置错误：{exc}", file=sys.stderr)
         return 1
@@ -77,12 +135,9 @@ def main(argv: list[str] | None = None) -> int:
     except CodeWispError as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 1
-
-    try:
-        return run_cli(agent, workspace_root=workspace_root)
-    except CodeWispError as exc:
-        print(f"错误：{exc}", file=sys.stderr)
-        return 1
+    finally:
+        if store is not None:
+            store.close()
 
 
 if __name__ == "__main__":

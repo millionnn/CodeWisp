@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from backend.app.session.ids import new_tool_call_id
+
 
 @dataclass(frozen=True)
 class ToolCall:
@@ -21,6 +23,57 @@ class ToolCall:
     arguments_raw: str | None = None
     # arguments JSON 解析失败时的错误说明；非空则 Agent 不应调用 Executor
     parse_error: str | None = None
+
+    def with_stable_id(self) -> ToolCall:
+        """若 id 为空则分配 ``tc_<uuid>``；已有非空 id 则原样返回。"""
+        if (self.id or "").strip():
+            return self
+        return ToolCall(
+            id=new_tool_call_id(),
+            name=self.name,
+            arguments=dict(self.arguments),
+            arguments_raw=self.arguments_raw,
+            parse_error=self.parse_error,
+        )
+
+    def to_persistence_dict(self) -> dict[str, Any]:
+        """完整领域序列化（含 arguments_raw / parse_error），供持久化 round-trip。"""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "arguments": dict(self.arguments),
+            "arguments_raw": self.arguments_raw,
+            "parse_error": self.parse_error,
+        }
+
+    @classmethod
+    def from_persistence_dict(cls, data: dict[str, Any]) -> ToolCall:
+        if not isinstance(data, dict):
+            raise TypeError("ToolCall.from_persistence_dict 需要 dict")
+        name = data.get("name")
+        if not isinstance(name, str):
+            raise ValueError("ToolCall.name 必须是字符串")
+        raw_id = data.get("id", "")
+        if raw_id is None:
+            raw_id = ""
+        if not isinstance(raw_id, str):
+            raise ValueError("ToolCall.id 必须是字符串")
+        arguments = data.get("arguments") or {}
+        if not isinstance(arguments, dict):
+            raise ValueError("ToolCall.arguments 必须是 dict")
+        arguments_raw = data.get("arguments_raw")
+        if arguments_raw is not None and not isinstance(arguments_raw, str):
+            raise ValueError("ToolCall.arguments_raw 必须是字符串或 None")
+        parse_error = data.get("parse_error")
+        if parse_error is not None and not isinstance(parse_error, str):
+            raise ValueError("ToolCall.parse_error 必须是字符串或 None")
+        return cls(
+            id=raw_id,
+            name=name,
+            arguments=dict(arguments),
+            arguments_raw=arguments_raw,
+            parse_error=parse_error,
+        ).with_stable_id()
 
 
 @dataclass(frozen=True)

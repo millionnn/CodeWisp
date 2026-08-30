@@ -1,5 +1,40 @@
 # 开发日志
 
+## V0.6
+
+**日期：** 2026-08-30
+
+### 目标
+
+Session、Conversation Persistence、Agent Run/Step 身份、SQLite、Backend API；CLI 与 API 共用 Agent Core。为 V0.7 Provider/Model 与 V0.9 Snapshot/Undo 预留稳定 ID 与模型身份字段。
+
+### 已完成
+
+- Domain 序列化 round-trip（Message / ToolCall / AgentRun / AgentStep / Session）
+- SqliteStore + migration v1；Session / Conversation / AgentRun Repositories
+- AgentService：Loop 外持久化；Session Resume；per-session 锁
+- FastAPI：Session CRUD + GET/POST messages
+- CLI：经 AgentService；`/sessions` `/use` `/history` 等；ASCII Banner
+- 集成与 API 测试；文档更新
+- **未做** Multi-Provider Runtime、Snapshot/Undo、Web UI、Context Compression
+
+### 设计决策
+
+1. **AgentLoop 不知 SQLite** — Persistence 在 AgentService 投影。
+2. **Run 冗余 provider/model** — 审计「当时用的模型」，不绑可变 Session 配置。
+3. **不建 snapshots 表** — 仅保证 `step_id` / `tool_call_id` 稳定唯一。
+4. **CLI 与 API 同一条编排路径** — 禁止第二套 Agent Loop。
+
+### 测试结果
+
+`pytest`：**251 passed**（含 V0.1–V0.5 regression + V0.6）。
+
+### 后续（需确认后再做）
+
+V0.7 Provider / Model Registry；V0.8 Web UI / Trace；V0.9 Diff / Snapshot。
+
+---
+
 ## V0.5
 
 **日期：** 2026-08-30
