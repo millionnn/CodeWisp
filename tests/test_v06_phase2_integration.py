@@ -258,7 +258,7 @@ def test_phase2_architecture_agent_core_has_no_sqlite_or_persistence() -> None:
     assert violations == [], violations
 
 
-def test_phase2_schema_version_is_v2(tmp_path: Path) -> None:
+def test_phase2_schema_version_includes_v4_semantic(tmp_path: Path) -> None:
     store = SqliteStore(tmp_path / "schema.db")
     store.connect()
-    assert store.schema_version() == 2
+    assert store.schema_version() == 4

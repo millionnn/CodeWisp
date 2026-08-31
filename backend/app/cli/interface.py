@@ -20,6 +20,11 @@ from backend.app.cli.prompt import read_line
 from backend.app.cli.render_diff import render_file_diffs
 from backend.app.cli.render_md import render_markdown
 from backend.app.cli.select import select_option
+from backend.app.cli.status_bar import (
+    DEFAULT_SESSION_TITLES,
+    StatusBarState,
+    summarize_session_title,
+)
 from backend.app.cli.theme import get_theme, make_console
 from backend.app.cli.trace import render_agent_trace, render_run_summary
 from backend.app.changes.errors import RevertError
@@ -52,13 +57,17 @@ def print_banner(
     output_fn("")
     output_fn("  Commands  : /help  /sessions  /session  /new  /use  /history")
     output_fn("              /providers  /models  /model  /diff  /revert")
-    output_fn("              /status  /delete  /exit")
+    output_fn("              /context  /plan  /memory  /status  /delete  /exit")
     output_fn("  Type a task to continue the current Session.\n")
 
 
-def read_user_input(prompt: str = "> ") -> str | None:
+def read_user_input(
+    prompt: str = "> ",
+    *,
+    bottom_toolbar=None,
+) -> str | None:
     """从标准输入读取一行（prompt_toolkit：正确处理中文退格/方向键）。"""
-    return read_line(prompt)
+    return read_line(prompt, bottom_toolbar=bottom_toolbar)
 
 
 def _print_run_result(
@@ -166,7 +175,7 @@ def run_cli(
     model_id: str = DEFAULT_MODEL_ID,
     input_fn: Callable[[str], str | None] = read_user_input,
     output_fn: Callable[[str], None] = print,
-    show_tool_trace: bool = True,
+    show_tool_trace: bool = False,
 ) -> int:
     """交互式入口：命令经 Service；任务经 AgentService.run。"""
     try:
@@ -197,10 +206,36 @@ def run_cli(
         input_fn=select_input,
         output_fn=output_fn,
     )
-    live_sink = CliEventSink(output_fn=output_fn, model_id=current.model_id)
+    status_bar = StatusBarState()
+    status_bar.update_workspace(workspace_root)
+    status_bar.update_from_session(current)
+
+    def _plan_provider():
+        try:
+            return agents.get_latest_plan(current.session_id)
+        except Exception:  # noqa: BLE001
+            return None
+
+    live_sink = CliEventSink(
+        output_fn=output_fn,
+        model_id=current.model_id,
+        plan_provider=_plan_provider,
+        show_todos=status_bar.show_todos,
+        show_tool_trace=show_tool_trace,
+    )
+
+    def _prompt_toolbar() -> str:
+        # OpenCode 风格 footer：左 workspace，右 title/model/tokens
+        return status_bar.toolbar_text()
 
     while True:
-        user_text = input_fn("> ")
+        # 非 TTY / 测试：在提示前打印一行 footer；TTY 用 bottom_toolbar（不占对话区）
+        use_toolbar = input_fn is read_user_input
+        if not use_toolbar:
+            status_bar.print_line(output_fn)
+            user_text = input_fn("> ")
+        else:
+            user_text = read_user_input("> ", bottom_toolbar=_prompt_toolbar)
         if user_text is None:
             _discard_unused_session(agents, current, output_fn=output_fn)
             output_fn("再见。")
@@ -248,6 +283,18 @@ def run_cli(
             _cmd_status(agents, current, output_fn)
             continue
 
+        if lower == "/context" or lower.startswith("/context "):
+            _cmd_context(agents, current, user_text, output_fn)
+            continue
+
+        if lower == "/plan" or lower.startswith("/plan "):
+            _cmd_plan(agents, current, user_text, output_fn)
+            continue
+
+        if lower == "/memory" or lower.startswith("/memory "):
+            _cmd_memory(agents, current, user_text, output_fn)
+            continue
+
         if lower == "/diff" or lower.startswith("/diff "):
             _cmd_diff(
                 agents,
@@ -275,6 +322,7 @@ def run_cli(
                 agents, current, user_text, output_fn, input_fn=select_input
             )
             live_sink.set_model_id(current.model_id)
+            status_bar.update_from_session(current)
             continue
 
         if lower.startswith("/new"):
@@ -310,6 +358,8 @@ def run_cli(
                 output_fn(f"错误：{exc}")
                 continue
             live_sink.set_model_id(current.model_id)
+            status_bar.update_from_session(current)
+            status_bar.update_context(used=None, budget=None)
             output_fn(
                 f"已创建 Session: {current.session_id} ({current.title})\n"
                 f"Model: {current.provider_id}/{current.model_id}"
@@ -343,6 +393,15 @@ def run_cli(
             _discard_unused_session(agents, current, output_fn=output_fn)
             current = nxt
             live_sink.set_model_id(current.model_id)
+            status_bar.update_from_session(current)
+            try:
+                ctx = agents.get_context_status(current.session_id)
+                status_bar.update_context(
+                    used=ctx.total_tokens,
+                    budget=int(ctx.budget.get("usable_budget") or 0) or None,
+                )
+            except Exception:  # noqa: BLE001
+                status_bar.update_context(used=None, budget=None)
             output_fn(
                 f"已切换到 Session: {current.session_id} ({current.title})\n"
                 f"Model: {current.provider_id}/{current.model_id}\n"
@@ -391,6 +450,8 @@ def run_cli(
                     output_fn(f"错误：无法创建替代 Session：{exc}")
                     return 1
                 live_sink.set_model_id(current.model_id)
+                status_bar.update_from_session(current)
+                status_bar.update_context(used=None, budget=None)
                 output_fn(
                     f"已切换到新 Session: {current.session_id} ({current.title})"
                 )
@@ -403,14 +464,42 @@ def run_cli(
         live_sink.set_model_id(current.model_id)
         try:
             # 每轮任务重置实时 sink，避免跨 run 累加
-            live_sink = CliEventSink(output_fn=output_fn, model_id=current.model_id)
+            live_sink = CliEventSink(
+                output_fn=output_fn,
+                model_id=current.model_id,
+                plan_provider=_plan_provider,
+                show_todos=status_bar.show_todos,
+                show_tool_trace=show_tool_trace,
+            )
+            # 未命名 Session：用首条用户消息摘要作为标题
+            if current.title.strip() in DEFAULT_SESSION_TITLES:
+                runs_before = agents.sessions.list_runs(current.session_id)
+                if not runs_before:
+                    try:
+                        current = agents.sessions.rename_session(
+                            current.session_id,
+                            summarize_session_title(user_text),
+                        )
+                        status_bar.update_from_session(current)
+                    except SessionError:
+                        pass
+
             result = agents.run(
                 current.session_id,
                 user_text,
-                event_sink=live_sink if show_tool_trace else None,
+                event_sink=live_sink,
                 permission_handler=permission_handler,
             )
             current = result.session
+            status_bar.update_from_session(current)
+            try:
+                ctx = agents.get_context_status(current.session_id)
+                status_bar.update_context(
+                    used=ctx.total_tokens,
+                    budget=int(ctx.budget.get("usable_budget") or 0) or None,
+                )
+            except Exception:  # noqa: BLE001
+                pass
         except CodeWispError as exc:
             output_fn(f"错误：{exc}")
             continue
@@ -707,6 +796,174 @@ def _pick_session(
         input_fn=input_fn,
         output_fn=output_fn,
     )
+
+
+def _cmd_context(
+    agents: AgentService,
+    current: Session,
+    user_text: str,
+    output_fn: Callable[[str], None],
+) -> None:
+    """``/context`` [status|compact|memory] — 分层上下文诊断。"""
+    parts = user_text.strip().split()
+    sub = parts[1].lower() if len(parts) > 1 else "status"
+    try:
+        if sub in {"status", "show", "budget"}:
+            status = agents.get_context_status(current.session_id)
+            _render_context_status(status, output_fn=output_fn)
+            return
+        if sub == "compact":
+            ckpt = agents.compact_context(current.session_id)
+            output_fn(
+                f"已创建 checkpoint: {ckpt.checkpoint_id} "
+                f"(trigger={ckpt.trigger.value}, boundary={ckpt.retained_message_boundary})"
+            )
+            status = agents.get_context_status(current.session_id)
+            _render_context_status(status, output_fn=output_fn)
+            return
+        if sub == "memory":
+            memories = agents.list_memories(current.session_id, include_invalidated=True)
+            if not memories:
+                output_fn("（暂无 durable memory）")
+                return
+            output_fn("Durable Memory\n")
+            for m in memories:
+                flag = " [invalidated]" if m.invalidated else ""
+                loc = f" @ {m.file_path}" if m.file_path else ""
+                output_fn(
+                    f"  [{m.category.value}] {m.content[:120]} "
+                    f"(source={m.source_type.value}"
+                    f"{':' + m.source_id if m.source_id else ''}{loc}){flag}"
+                )
+            return
+        output_fn("用法: /context [status|compact|memory]")
+    except (SessionError, CodeWispError) as exc:
+        output_fn(f"错误: {exc}")
+
+
+def _render_context_status(status, *, output_fn: Callable[[str], None]) -> None:
+    budget = status.budget
+    usable = budget.get("usable_budget", 0)
+    limit = budget.get("context_limit", 0)
+    output_fn("Hierarchical Context\n")
+    width = max((len(s.name) for s in status.sections), default=12)
+    for sec in status.sections:
+        if sec.tokens <= 0 and sec.name not in {"System", "Task State", "Plan"}:
+            continue
+        label = f"{sec.name:<{width}}"
+        tok = _format_tokens(sec.tokens)
+        output_fn(f"  {label}  {tok}")
+    output_fn("  " + "-" * (width + 14))
+    output_fn(
+        f"  {'Total':<{width}}  {_format_tokens(status.total_tokens)} / {_format_tokens(usable)}"
+        f"  (window {_format_tokens(limit)}, estimator={budget.get('estimator')})"
+    )
+    comp = status.compaction or {}
+    if comp:
+        output_fn("\nCompaction:")
+        output_fn(f"  automatic/manual count: {comp.get('count', 0)}")
+        if comp.get("last_checkpoint_id"):
+            output_fn(f"  last checkpoint: {comp.get('last_checkpoint_id')}")
+            output_fn(f"  last at: {comp.get('last_checkpoint_at')}")
+        if comp.get("retained_tail") is not None:
+            output_fn(f"  retained tail messages: {comp.get('retained_tail')}")
+        if comp.get("compacted"):
+            output_fn("  last build: compacted=yes")
+
+
+def _format_tokens(n: int) -> str:
+    if n >= 1000:
+        return f"{n / 1000:.1f}k"
+    return str(n)
+
+
+def _cmd_plan(
+    agents: AgentService,
+    current: Session,
+    user_text: str,
+    output_fn: Callable[[str], None],
+) -> None:
+    parts = user_text.strip().split(maxsplit=1)
+    sub = parts[1].strip().lower() if len(parts) > 1 else "show"
+    try:
+        if sub in {"show", "status", ""}:
+            plan = agents.get_latest_plan(current.session_id)
+            if plan is None:
+                output_fn("No active plan.")
+                return
+            from backend.app.cli.render_plan import render_plan_strip
+
+            render_plan_strip(plan, output_fn=output_fn)
+            return
+        if sub == "refresh":
+            plan = agents.refresh_plan(current.session_id)
+            output_fn("Plan refreshed.\n")
+            from backend.app.cli.render_plan import render_plan_strip
+
+            render_plan_strip(plan, output_fn=output_fn)
+            return
+        output_fn("用法: /plan [show|refresh]")
+    except (SessionError, CodeWispError) as exc:
+        output_fn(f"错误: {exc}")
+
+
+def _cmd_memory(
+    agents: AgentService,
+    current: Session,
+    user_text: str,
+    output_fn: Callable[[str], None],
+) -> None:
+    parts = user_text.strip().split(maxsplit=2)
+    sub = parts[1].lower() if len(parts) > 1 else "help"
+    try:
+        if sub in {"help", ""}:
+            output_fn(
+                "Memory commands:\n"
+                "  /memory search <query>\n"
+                "  /memory index\n"
+                "  /memory rebuild\n"
+                "  /memory stats\n"
+            )
+            return
+        if sub == "search":
+            query = parts[2].strip() if len(parts) > 2 else ""
+            if not query:
+                output_fn("用法: /memory search <query>")
+                return
+            hits = agents.memory_search(current.session_id, query)
+            if not hits:
+                output_fn("（无检索结果）")
+                return
+            output_fn(f"Retrieved ({len(hits)}):\n")
+            for h in hits:
+                loc = h.path or h.source
+                output_fn(f"  · [{h.source}] {loc}  score={h.score:.3f}")
+                preview = " ".join(h.content.split())[:160]
+                output_fn(f"    {preview}")
+            return
+        if sub == "index":
+            stats = agents.memory_index(current.session_id)
+            output_fn(
+                f"Indexed: docs={stats.documents} chunks={stats.chunks} "
+                f"model={stats.embedding_model}"
+            )
+            return
+        if sub == "rebuild":
+            stats = agents.memory_rebuild(current.session_id)
+            output_fn(
+                f"Rebuilt: docs={stats.documents} chunks={stats.chunks} "
+                f"model={stats.embedding_model}"
+            )
+            return
+        if sub == "stats":
+            stats = agents.memory_stats(current.session_id)
+            output_fn("Memory Index Stats")
+            for k, v in stats.to_dict().items():
+                output_fn(f"  {k}: {v}")
+            return
+        output_fn("用法: /memory [search|index|rebuild|stats]")
+    except (SessionError, CodeWispError) as exc:
+        output_fn(f"错误: {exc}")
 
 
 def _cmd_status(

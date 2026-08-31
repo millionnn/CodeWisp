@@ -180,8 +180,10 @@ def test_cli_shows_tool_trace_and_answer(tmp_path: Path) -> None:
     )
 
     assert code == 0
-    assert any("◇ calculator" in line or "✓ calculator" in line for line in outputs)
-    assert any("答案是 4" in line for line in outputs)
+    # 默认 Plan 优先：应看到 Plan 面板；工具过程默认静音
+    blob = "\n".join(outputs)
+    assert "答案是 4" in blob
+    assert "Plan" in blob or "●" in blob or "○" in blob or "✓" in blob
 
 
 def test_cli_session_commands_new_use_list_history(tmp_path: Path) -> None:

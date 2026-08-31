@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 _SESSION = None
@@ -41,8 +42,12 @@ def interactive_available() -> bool:
     return bool(sys.stdin.isatty() and sys.stdout.isatty())
 
 
-def read_line(prompt: str = "> ") -> str | None:
-    """读取一行用户输入；支持退格/方向键/历史。EOF/Ctrl+C → None。"""
+def read_line(
+    prompt: str = "> ",
+    *,
+    bottom_toolbar: Callable[[], str | None] | str | None = None,
+) -> str | None:
+    """读取一行用户输入；支持退格/方向键/历史；可选 OpenCode 风格底部 footer。"""
     if not interactive_available():
         return _fallback_input(prompt)
 
@@ -51,16 +56,26 @@ def read_line(prompt: str = "> ") -> str | None:
         return _fallback_input(prompt)
 
     try:
-        # patch_stdout：避免 Rich/Spinner 打乱光标后退格错位
         from prompt_toolkit.patch_stdout import patch_stdout
+        from prompt_toolkit.styles import Style as PtStyle
+
+        kwargs: dict = {}
+        if bottom_toolbar is not None:
+            kwargs["bottom_toolbar"] = bottom_toolbar
+            # OpenCode-like muted footer
+            kwargs["style"] = PtStyle.from_dict(
+                {
+                    "bottom-toolbar": "noreverse fg:#808080",
+                    "bottom-toolbar.text": "noreverse fg:#808080",
+                }
+            )
 
         with patch_stdout():
-            text = session.prompt(prompt)
+            text = session.prompt(prompt, **kwargs)
     except (EOFError, KeyboardInterrupt):
         print()
         return None
     return text.strip()
-
 
 def _fallback_input(prompt: str) -> str | None:
     try:

@@ -16,6 +16,7 @@ from backend.app.agent.errors import AgentError
 from backend.app.agent.event_sink import AgentEventSink, NullEventSink
 from backend.app.agent.events import AgentEvent
 from backend.app.agent.state import AgentState, AgentStatus
+from backend.app.context.manager import ContextManager
 from backend.app.llm.client import LLMClient
 from backend.app.llm.errors import CodeWispError
 from backend.app.llm.messages import Conversation
@@ -25,7 +26,7 @@ from backend.app.tools.registry import ToolRegistry
 from backend.app.tools.result import ToolResult
 
 # 迭代预算：每次 LLM 调用计 1 step（含修复闭环所需的多轮工具）
-DEFAULT_MAX_STEPS = 15
+DEFAULT_MAX_STEPS = 40
 
 DEFAULT_AGENT_SYSTEM_PROMPT = (
     "你是 CodeWisp，一名编程助手。"
@@ -55,6 +56,7 @@ class AgentLoop:
         max_steps: int = DEFAULT_MAX_STEPS,
         system_prompt: str = DEFAULT_AGENT_SYSTEM_PROMPT,
         event_sink: AgentEventSink | None = None,
+        context_manager: ContextManager | None = None,
     ) -> None:
         if max_steps < 1:
             raise AgentError("max_steps 必须 >= 1")
@@ -64,6 +66,7 @@ class AgentLoop:
         self.max_steps = max_steps
         self.system_prompt = system_prompt
         self._event_sink: AgentEventSink = event_sink or NullEventSink()
+        self.context_manager = context_manager
 
     def run(
         self,
@@ -95,6 +98,8 @@ class AgentLoop:
         )
         self._emit_event(state, "agent_started", 0, metadata={"task": text})
         conv.add_user(text)
+        if self.context_manager is not None:
+            self.context_manager.update_after_user(text)
 
         tools = self.registry.list_schemas()
 
@@ -121,6 +126,8 @@ class AgentLoop:
                 if not response.has_tool_calls:
                     answer = response.text
                     conv.add_assistant(answer)
+                    if self.context_manager is not None:
+                        self.context_manager.update_after_assistant(answer)
                     state.final_answer = answer
                     state.status = AgentStatus.COMPLETED
                     state.termination_reason = "completed"
@@ -244,15 +251,22 @@ class AgentLoop:
                 )
             )
 
+        # V1.0：分层 Context 视图；durable conversation 不被 compaction 删除
+        model_conversation = conversation
+        if self.context_manager is not None:
+            model_conversation = self.context_manager.build_context(
+                conversation, tools=tools
+            )
+
         chat_stream = getattr(self.llm, "chat_stream", None)
         if callable(chat_stream):
             return chat_stream(
-                conversation,
+                model_conversation,
                 tools=tools,
                 on_text_delta=on_text_delta,
                 on_text_discard=on_text_discard,
             )
-        return self.llm.chat(conversation, tools=tools)
+        return self.llm.chat(model_conversation, tools=tools)
 
     def _handle_tool_call(
         self,
@@ -291,15 +305,29 @@ class AgentLoop:
             result = self.executor.execute(tool_call.name, tool_call.arguments)
 
         event_type = "tool_completed" if result.success else "tool_failed"
+        meta = result.to_dict()
+        if isinstance(tool_call.arguments, dict):
+            meta.setdefault("arguments", tool_call.arguments)
         self._emit_event(
             state,
             event_type,
             step,
             tool_name=tool_call.name,
-            metadata=result.to_dict(),
+            metadata=meta,
         )
 
         observation = self._format_observation(result)
+        if self.context_manager is not None:
+            observation = self.context_manager.prune_observation(
+                observation, tool_name=tool_call.name
+            )
+            self.context_manager.update_after_tool(
+                tool_name=tool_call.name,
+                tool_call_id=tool_call.id or f"call_step{step}",
+                arguments=tool_call.arguments if isinstance(tool_call.arguments, dict) else {},
+                result=result,
+                observation=observation,
+            )
         call_id = tool_call.id or f"call_step{step}"
         conversation.add_tool_result(call_id, observation)
         return result

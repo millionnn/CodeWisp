@@ -46,6 +46,19 @@ class CliTheme:
     name: str  # default | mono
 
 
+def terminal_width(*, fallback: int = 100) -> int:
+    """读取当前终端列数（不缓存），回答框随窗口缩放。"""
+    try:
+        cols = os.get_terminal_size(sys.stdout.fileno()).columns
+    except (OSError, AttributeError, ValueError):
+        try:
+            cols = os.get_terminal_size().columns
+        except OSError:
+            return fallback
+    # 不设人为上限，避免宽屏时 Panel 变窄导致观感截断；下限保证可读
+    return max(40, cols)
+
+
 @lru_cache(maxsize=1)
 def get_theme() -> CliTheme:
     env_theme = (os.getenv("CODEWISP_THEME") or "default").strip().lower()
@@ -59,15 +72,10 @@ def get_theme() -> CliTheme:
     color = False if no_color or env_theme == "mono" else (force_color or is_tty)
     rich_enabled = color  # mono/NO_COLOR → 纯文本路径，便于测试与管道
 
-    try:
-        width = max(40, min(120, os.get_terminal_size().columns))
-    except OSError:
-        width = 80
-
     return CliTheme(
         rich_enabled=rich_enabled,
         color=color,
-        width=width,
+        width=terminal_width(),
         name=env_theme,
     )
 
@@ -77,12 +85,14 @@ def reset_theme_cache() -> None:
     get_theme.cache_clear()
 
 
-def make_console(*, force_plain: bool = False) -> Console:
+def make_console(*, force_plain: bool = False, width: int | None = None) -> Console:
     theme = get_theme()
     plain = force_plain or not theme.rich_enabled
+    # 每次渲染用最新终端宽度，窗口缩放后回答框立即适配
+    w = width if width is not None else terminal_width(fallback=theme.width)
     return Console(
         theme=CODEWISP_THEME,
-        width=theme.width,
+        width=w,
         highlight=False,
         soft_wrap=True,
         force_terminal=False if plain else None,

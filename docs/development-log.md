@@ -1,5 +1,35 @@
 # 开发日志
 
+## V1.0+ Semantic Memory & Intelligent Context
+
+**日期：** 2026-08-31
+
+### 目标
+
+在不重写 AgentLoop 的前提下，把 V1.0 启发式 Context/Memory/Plan 升级为：LLM Planner（旁路）、Persistent Memory + Provenance、Semantic Code Index、Hybrid Retrieval、Memory-aware Context Assembly。
+
+### 已完成
+
+- `backend/app/memory/`：EmbeddingProvider（默认 Hash）、结构感知 chunking、SemanticIndex、HybridRetriever、LLM/启发式 MemoryExtractor、MemoryService
+- `backend/app/planning/`：PlannerService + JSON parser；不修改 Workspace
+- migration `004_semantic_memory.sql`：semantic_documents/chunks、task_summaries、memory 扩展列
+- ContextManager：Retrieved Context 注入；revert 后 index/memory 失效
+- CLI：`/memory *`、`/plan refresh`；API：`/api/sessions/{id}/memories|plans|context`
+- 测试：`tests/test_semantic_v10plus.py`；全量 **394 passed**
+
+### 设计决策
+
+1. Planner / Memory 是旁路服务，不进 AgentLoop，不绕过 Permission
+2. 与 ScriptedLLM 隔离：主对话队列不可被旁路 `chat()` 抢占
+3. 向量存 SQLite JSON + 本地 cosine；默认 HashEmbedding（无 API key）
+4. Embedding 只用于 code/docs/rules/memory/task summary，不用 Session/Run 元数据
+
+### 后续
+
+可选：真实 embedding provider 插件、独立 planning model、更细的 decay。
+
+---
+
 ## V0.8 Interactive Permission + Live Agent Event
 
 **日期：** 2026-08-30

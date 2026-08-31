@@ -32,6 +32,11 @@ snapshot_created         # V0.9 Snapshot / pre_revert 等
 revert_started
 revert_completed
 revert_failed
+plan_created             # V1.0+ 动态 Plan
+plan_step_started
+plan_step_completed
+plan_step_failed
+plan_completed
 agent_completed
 agent_failed
 ```

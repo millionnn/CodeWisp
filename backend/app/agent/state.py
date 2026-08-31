@@ -28,7 +28,7 @@ class AgentState:
 
     status: AgentStatus = AgentStatus.IDLE
     step: int = 0
-    max_steps: int = 15
+    max_steps: int = 40
     conversation: Conversation = field(default_factory=Conversation)
     final_answer: str | None = None
     error: str | None = None

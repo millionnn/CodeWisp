@@ -19,9 +19,6 @@ from backend.app.agent.event_sink import (
 from backend.app.agent.events import AgentEvent
 from backend.app.agent.loop import DEFAULT_AGENT_SYSTEM_PROMPT, DEFAULT_MAX_STEPS, AgentLoop
 from backend.app.agent.state import AgentState, AgentStatus
-from backend.app.llm.client import LLMClient
-from backend.app.llm.messages import Message
-from backend.app.llm.response import ToolCall
 from backend.app.changes.diff import compute_file_diffs
 from backend.app.changes.models import (
     ChangeType,
@@ -32,10 +29,27 @@ from backend.app.changes.models import (
 )
 from backend.app.changes.revert import RevertService
 from backend.app.changes.tracker import WriteChangeTracker
+from backend.app.context.budget import ContextBudget
+from backend.app.context.manager import DefaultContextManager
+from backend.app.context.models import (
+    CheckpointTrigger,
+    ContextCheckpoint,
+    ContextStatus,
+    MemoryItem,
+    Plan,
+    TaskState,
+)
+from backend.app.llm.client import LLMClient
+from backend.app.llm.messages import Message
+from backend.app.llm.response import ToolCall
+from backend.app.memory.models import IndexStats, RetrievedContext, TaskRunSummary
+from backend.app.memory.service import MemoryService
 from backend.app.persistence.agent_run_repository import AgentRunRepository
+from backend.app.persistence.context_repository import ContextRepository
 from backend.app.persistence.conversation_repository import ConversationRepository
 from backend.app.persistence.snapshot_repository import SnapshotRepository
 from backend.app.persistence.store import SqliteStore
+from backend.app.planning.service import PlannerService
 from backend.app.permissions.decision import PermissionDecision
 from backend.app.permissions.handler import PermissionHandler
 from backend.app.permissions.request import PermissionRequest
@@ -62,6 +76,11 @@ from backend.app.workspace.errors import WorkspaceError
 from backend.app.workspace.workspace import Workspace
 
 LLMFactory = Callable[[Session], LLMClient]
+
+
+def _is_scripted_llm(llm: LLMClient) -> bool:
+    """测试用 ScriptedLLM 带有限响应队列；不可再用于 Planner/Memory 旁路调用。"""
+    return hasattr(llm, "_queue") or hasattr(llm, "_responses")
 
 
 @dataclass(frozen=True)
@@ -104,8 +123,13 @@ class AgentService:
         self._runs = AgentRunRepository(store)
         self._conversations = ConversationRepository(store)
         self._snapshots = SnapshotRepository(store)
+        self._context = ContextRepository(store)
+        self._memory = MemoryService(store)
+        self._planner = PlannerService(repository=self._context)
         self._lock_guard = threading.Lock()
         self._session_locks: dict[str, threading.Lock] = {}
+        # 进程内缓存：供 CLI /context 诊断（重启后可从 SQLite 重建）
+        self._context_managers: dict[str, DefaultContextManager] = {}
 
     def resume(self, session_id: str) -> SessionResumeState:
         """恢复 Session 历史（不跑 Agent）。等价于 ``sessions.resume_session``。"""
@@ -289,7 +313,11 @@ class AgentService:
             ),
             event_sink=event_sink or self._event_sink,
         )
-        return service.revert_step(step, session_workspace=session.workspace)
+        report = service.revert_step(step, session_workspace=session.workspace)
+        if report.ok:
+            paths = list(report.applied) if report.applied else None
+            self._invalidate_context(session.session_id, session.workspace, paths=paths)
+        return report
 
     def revert_run(
         self,
@@ -316,9 +344,166 @@ class AgentService:
             ),
             event_sink=event_sink or self._event_sink,
         )
-        return service.revert_run(
+        report = service.revert_run(
             run, steps, session_workspace=session.workspace
         )
+        if report.ok:
+            paths = list(report.applied) if report.applied else None
+            self._invalidate_context(session.session_id, session.workspace, paths=paths)
+        return report
+
+    # ── V1.0 Context / Plan 边界（CLI / 未来 Web）────────────────
+
+    def get_context_manager(self, session_id: str) -> DefaultContextManager:
+        session = self.sessions.get_session(session_id)
+        return self._get_or_create_context_manager(session)
+
+    def get_context_status(self, session_id: str) -> ContextStatus:
+        session = self.sessions.get_session(session_id)
+        cm = self._get_or_create_context_manager(session)
+        conversation = self._conversations.load_conversation(session_id)
+        return cm.status(conversation)
+
+    def compact_context(
+        self,
+        session_id: str,
+        *,
+        trigger: CheckpointTrigger = CheckpointTrigger.MANUAL,
+    ) -> ContextCheckpoint:
+        session = self.sessions.get_session(session_id)
+        cm = self._get_or_create_context_manager(session)
+        conversation = self._conversations.load_conversation(session_id)
+        return cm.compact(conversation, trigger=trigger)
+
+    def list_memories(self, session_id: str, *, include_invalidated: bool = False) -> list[MemoryItem]:
+        self.sessions.get_session(session_id)
+        return self._context.list_memories(
+            session_id, include_invalidated=include_invalidated
+        )
+
+    def get_active_task(self, session_id: str) -> TaskState | None:
+        self.sessions.get_session(session_id)
+        return self._context.get_active_task(session_id)
+
+    def get_latest_plan(self, session_id: str) -> Plan | None:
+        self.sessions.get_session(session_id)
+        return self._context.get_latest_plan(session_id)
+
+    def list_plans(self, session_id: str) -> list[Plan]:
+        self.sessions.get_session(session_id)
+        return self._context.list_plans(session_id)
+
+    def refresh_plan(self, session_id: str) -> Plan:
+        session = self.sessions.get_session(session_id)
+        cm = self._get_or_create_context_manager(session)
+        llm, _, _ = self._resolve_runtime(session)
+        self._planner.set_llm(llm)
+        cm.refresh_project_rules(focus_path=None)
+        goal = cm.task.goal if cm.task else "continue"
+        cm.refresh_retrieval(goal)
+        memories = "\n".join(m.render_line() for m in cm.memories if not m.invalidated)
+        retrieved = "\n\n".join(
+            getattr(r, "render", lambda: str(r))() for r in cm.retrieved[:6]
+        )
+        plan = self._planner.refresh_plan(
+            session_id=session_id,
+            goal=goal,
+            project_rules=cm.project_rules.render(),
+            retrieved=retrieved,
+            memories=memories,
+        )
+        cm.plan = plan
+        return plan
+
+    def memory_search(
+        self, session_id: str, query: str, *, top_k: int = 10
+    ) -> list[RetrievedContext]:
+        session = self.sessions.get_session(session_id)
+        self._memory.ensure_index(session.workspace)
+        return self._memory.search(
+            session.workspace, query, session_id=session_id, top_k=top_k
+        )
+
+    def memory_index(self, session_id: str) -> IndexStats:
+        session = self.sessions.get_session(session_id)
+        return self._memory.index_workspace(session.workspace)
+
+    def memory_rebuild(self, session_id: str) -> IndexStats:
+        session = self.sessions.get_session(session_id)
+        return self._memory.rebuild_index(session.workspace)
+
+    def memory_stats(self, session_id: str) -> IndexStats:
+        session = self.sessions.get_session(session_id)
+        return self._memory.stats(session.workspace)
+
+    def get_context_bundle(self, session_id: str) -> dict:
+        """未来 Web / API：上下文诊断包。"""
+        status = self.get_context_status(session_id)
+        plan = self.get_latest_plan(session_id)
+        task = self.get_active_task(session_id)
+        return {
+            "status": status.to_dict(),
+            "task": task.to_dict() if task else None,
+            "plan": plan.to_dict() if plan else None,
+            "memories": [m.to_dict() for m in self.list_memories(session_id)],
+        }
+
+    def _context_window_for_session(self, session: Session) -> int | None:
+        resolved = self.resolve_model(session)
+        if resolved is not None:
+            return resolved.model.context_window
+        return None
+
+    def _get_or_create_context_manager(self, session: Session) -> DefaultContextManager:
+        existing = self._context_managers.get(session.session_id)
+        if existing is not None:
+            return existing
+        budget = ContextBudget.from_context_window(
+            self._context_window_for_session(session)
+        )
+
+        def on_retrieve(query: str):
+            try:
+                self._memory.ensure_index(session.workspace)
+                return self._memory.search(
+                    session.workspace, query, session_id=session.session_id, top_k=8
+                )
+            except Exception:  # noqa: BLE001
+                return []
+
+        cm = DefaultContextManager(
+            session_id=session.session_id,
+            workspace_root=session.workspace,
+            budget=budget,
+            repository=self._context,
+            model_id=session.model_id,
+            planner=self._planner,
+            on_retrieve=on_retrieve,
+        )
+        cm.load()
+        self._context_managers[session.session_id] = cm
+        return cm
+
+    def _invalidate_context(
+        self,
+        session_id: str,
+        workspace: str,
+        *,
+        paths: list[str] | None,
+    ) -> None:
+        session = self.sessions.get_session(session_id)
+        # 确保 manager 存在（即使尚未跑过 Agent）
+        cm = self._context_managers.get(session_id)
+        if cm is None:
+            cm = self._get_or_create_context_manager(session)
+        cm.invalidate_after_revert(paths=paths)
+        if paths:
+            try:
+                self._memory.invalidate_paths(
+                    workspace, paths, session_id=session_id
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
     def _resolve_runtime(self, session: Session) -> tuple[LLMClient, str, str]:
         """返回 (llm, provider_id, model_id)。优先级：llm_factory > model_resolver > llm。"""
@@ -397,10 +582,36 @@ class AgentService:
             )
         )
 
+        context_manager = self._get_or_create_context_manager(session)
+        # 刷新预算（可能切换过模型）
+        context_manager.budget = ContextBudget.from_context_window(
+            self._context_window_for_session(session)
+        )
+        context_manager.model_id = model_id
+        # 初始 Plan：真实 LLM 可驱动；ScriptedLLM（测试 _queue）则启发式，避免抢响应。
+        # Loop 内 replan 始终启发式（不与主对话争抢同一 client）。
+        if not _is_scripted_llm(llm):
+            self._planner.set_llm(llm)
+        else:
+            self._planner.set_llm(None)
+        context_manager._planner = self._planner  # noqa: SLF001
+        try:
+            self._memory.ensure_index(session.workspace)
+        except Exception:  # noqa: BLE001 — 索引失败不阻断主任务
+            pass
+
+        # Plan 事件必须在 begin_run 前挂上 sink，才能实时推到 CLI/Web
         outer_sink: AgentEventSink = event_sink or self._event_sink
         recorder = RecordingEventSink()
         change_tracker = WriteChangeTracker(workspace)
         sink: AgentEventSink = CompositeEventSink(recorder, change_tracker, outer_sink)
+        context_manager.set_event_emitter(sink.emit)
+
+        try:
+            context_manager.begin_run(text, agent_run_id=run.agent_run_id)
+        finally:
+            self._planner.set_llm(None)
+
         handler = (
             permission_handler
             if permission_handler is not None
@@ -468,9 +679,11 @@ class AgentService:
             max_steps=self._max_steps,
             system_prompt=self._system_prompt,
             event_sink=sink,
+            context_manager=context_manager,
         )
 
         state = loop.run(text, conversation=conversation)
+        context_manager.set_event_emitter(None)
         # permission_* 仅经 sink 发出；用 recorder 对齐完整时间线到 state.events
         # answer_delta 只服务实时 UI，不进入持久化轨迹
         state.events = [
@@ -523,6 +736,56 @@ class AgentService:
             final_answer=state.final_answer,
             error=state.error,
         )
+
+        # V1.0+：Run 结束后异步边界内抽取 Memory / Task Summary（失败忽略）
+        try:
+            # 与 Agent 共用 ScriptedLLM 队列时不得抽取，否则会吃掉下一轮响应
+            if not _is_scripted_llm(llm):
+                self._memory.set_llm(llm)
+            else:
+                self._memory.set_llm(None)
+            observations = [
+                (m.content or "")
+                for m in conversation.messages[persist_from:]
+                if m.role == "tool"
+            ]
+            changed = list(context_manager.task.workspace_state.modified_files) if context_manager.task else []
+            self._memory.extract_after_run(
+                session_id=session.session_id,
+                workspace=session.workspace,
+                objective=text,
+                final_answer=state.final_answer,
+                observations=observations,
+                changed_files=changed,
+                agent_run_id=run.agent_run_id,
+            )
+            context_manager.memories = self._context.list_memories(session.session_id)
+            summary = TaskRunSummary(
+                summary_id="",
+                session_id=session.session_id,
+                workspace=session.workspace,
+                objective=text,
+                agent_run_id=run.agent_run_id,
+                changed_files=changed,
+                important_decisions=list(
+                    context_manager.task.important_decisions if context_manager.task else []
+                ),
+                tests=list(
+                    context_manager.task.workspace_state.test_results
+                    if context_manager.task
+                    else []
+                ),
+                failures=[e for e in ([state.error] if state.error else [])],
+                final_result=state.termination_reason or state.status.value,
+                unresolved_issues=list(
+                    context_manager.task.blockers if context_manager.task else []
+                ),
+            )
+            self._memory.save_task_summary(summary)
+            if changed:
+                self._memory.index_paths(session.workspace, changed)
+        except Exception:  # noqa: BLE001
+            pass
 
         updated_session = self.sessions.touch_session(session.session_id)
         steps = tuple(self._runs.list_steps(run.agent_run_id))

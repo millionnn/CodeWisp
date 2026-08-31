@@ -49,8 +49,8 @@ class Session:
         *,
         title: str,
         workspace: str,
-        provider_id: str = DEFAULT_PROVIDER_ID,
-        model_id: str = DEFAULT_MODEL_ID,
+        provider_id: str = DEFAULT_PROVIDER_ID,#供应商 id
+        model_id: str = DEFAULT_MODEL_ID,#模型 id
         status: str = "active",
         session_id: str | None = None,
         created_at: str | None = None,
@@ -107,7 +107,7 @@ class AgentRun:
     model_id: str#模型ID
     status: str#状态
     termination_reason: str | None = None#终止原因
-    max_steps: int = 15
+    max_steps: int = 40
     final_answer: str | None = None#最终答案
     error: str | None = None#错误
     created_at: str | None = None#创建时间
@@ -122,7 +122,7 @@ class AgentRun:
         provider_id: str,
         model_id: str,
         status: str = "running",
-        max_steps: int = 15,
+        max_steps: int = 40,
         agent_run_id: str | None = None,
         termination_reason: str | None = None,
         final_answer: str | None = None,
@@ -165,7 +165,7 @@ class AgentRun:
     def from_dict(cls, data: dict[str, Any]) -> AgentRun:
         if not isinstance(data, dict):
             raise TypeError("AgentRun.from_dict 需要 dict")
-        max_steps = data.get("max_steps", 15)
+        max_steps = data.get("max_steps", 40)
         if not isinstance(max_steps, int) or isinstance(max_steps, bool):
             raise ValueError("max_steps 必须是 int")
         return cls(

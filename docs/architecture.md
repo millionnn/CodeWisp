@@ -147,7 +147,9 @@ V0.7 Phase 1  Provider / Model domain + registry
 V0.7 Phase 2  Runtime resolution (ModelResolver)
 V0.7 Phase 3  CLI Model / Provider UX + AgentEvent trace
 V0.8  Interactive Permission + Live EventSink  ← 当前
-V0.9  Web UI / SSE / Snapshot（未实现）
+V0.9  Snapshot / Diff / Revert
+V1.0  Hierarchical Context + Planning
+V1.0+ Semantic Memory + Hybrid Retrieval + LLM Planner/Extractor
 ```
 
 ## 终止条件
@@ -160,23 +162,21 @@ V0.9  Web UI / SSE / Snapshot（未实现）
 | `WAITING_PERMISSION` | 有 Handler 时等待用户 ALLOW/DENY（运行中投影） |
 | `FAILED` | 不可恢复错误 |
 
-## 最终架构 / 未来架构
+## 最终架构（V1.0+）
 
 ```text
-                         CodeWisp
-                            │
-                     Agent Runtime
-                            │
-        ┌───────────────────┼───────────────────┐
-        │                   │                   │
-      Session             Model              Tools
-        │             (V0.7 Provider)           │
-        └───────────────┬───────────────────────┘
-                        │
-                    Agent Run → Steps → ToolCall
-                        │
-                   Workspace → (V0.9 Snapshot / Diff / Undo)
+CLI / API
+    ↓
+AgentService
+    ├── ContextManager（装配 / 预算 / compaction）
+    ├── PlannerService（LLM 旁路，不改 Workspace）
+    ├── MemoryService（Index / Hybrid Retrieval / Extraction）
+    └── AgentLoop → LLM → Tools → Observation
+            ↑
+     SemanticIndex (SQLite metadata + local vectors)
 ```
+
+Context 优先级（摘要）：System → Rules → Task/Plan → Memory → Retrieved Code → Workspace → Recent → Tool Output。
 
 ## 配置项
 
@@ -187,6 +187,6 @@ V0.9  Web UI / SSE / Snapshot（未实现）
 | `LLM_MODEL` | 模型名 | `deepseek-chat` |
 | `CODEWISP_WORKSPACE` | 目标仓库根 | cwd |
 | `CODEWISP_DB` | SQLite 路径 | `~/.codewisp/codewisp.db` |
-| `--max-steps` | 迭代预算 | 15 |
+| `--max-steps` | 迭代预算 | 40 |
 | `--session` | 续跑 Session ID | 新建 |
 | `--provider-id` / `--model-id` | Session 模型身份（仅记录） | deepseek / LLM_MODEL |

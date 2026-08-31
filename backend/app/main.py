@@ -59,7 +59,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--max-steps",
         type=int,
         default=None,
-        help="Agent 迭代预算（每次 LLM 调用计 1 步）。省略时使用默认值。",
+        help="Agent 迭代预算（每次 LLM 调用计 1 步）。省略时默认 40。",
+    )
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="同时打印工具调用轨迹（默认只展示 Plan 进度面板）。",
     )
     parser.add_argument(
         "--db",
@@ -133,6 +138,7 @@ def main(argv: list[str] | None = None) -> int:
             session_title=args.title,
             provider_id=provider_id,
             model_id=model_id,
+            show_tool_trace=bool(args.trace),
         )
     except ConfigError as exc:
         print(f"配置错误：{exc}", file=sys.stderr)

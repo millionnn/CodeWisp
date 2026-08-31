@@ -19,7 +19,7 @@ from fastapi import FastAPI
 
 from backend.app.api.deps import AppState, build_app_state
 from backend.app.api.errors import register_exception_handlers
-from backend.app.api.routes import changes, messages, permissions, providers, sessions
+from backend.app.api.routes import changes, memory, messages, permissions, providers, sessions
 from backend.app.llm.client import LLMClient
 
 
@@ -71,6 +71,7 @@ def create_app(
     app.include_router(permissions.router)
     app.include_router(providers.router)
     app.include_router(changes.router)
+    app.include_router(memory.router)
 
     @app.get("/health")
     def health() -> dict[str, str]:

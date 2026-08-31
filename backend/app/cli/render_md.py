@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from backend.app.cli.theme import get_theme, make_console
+from backend.app.cli.theme import get_theme, make_console, terminal_width
 
-#把回答渲染成好看的md
+
 def looks_like_markdown(text: str) -> bool:
     if not text:
         return False
@@ -20,7 +20,7 @@ def render_markdown(
     output_fn: Callable[[str], None] | None = None,
     force_plain: bool = False,
 ) -> None:
-    """将 Markdown 打印到终端。"""
+    """将 Markdown 打印到终端（CodeWisp Panel）。"""
     body = text or ""
     capture = output_fn is not None and output_fn is not print
     plain = force_plain or not get_theme().rich_enabled or capture
@@ -31,7 +31,7 @@ def render_markdown(
             from rich.markdown import Markdown
 
             with console.capture() as cap:
-                console.print(Markdown(body, code_theme="monokai"))
+                console.print(Markdown(body, code_theme="monokai"), soft_wrap=True)
             rendered = cap.get().rstrip("\n")
         else:
             rendered = body
@@ -45,16 +45,28 @@ def render_markdown(
 
     from rich.markdown import Markdown
     from rich.panel import Panel
+    from rich.text import Text
 
-    console = make_console()
-    content: object = Markdown(body, code_theme="monokai") if looks_like_markdown(body) else body
+    width = terminal_width()
+    console = make_console(width=width)
+    if looks_like_markdown(body):
+        content: object = Markdown(body, code_theme="monokai", justify="left")
+    else:
+        content = Text(body, overflow="fold", no_wrap=False)
+
     console.print(
         Panel(
             content,
             title="[cw.agent]CodeWisp[/]",
             border_style="cyan",
             padding=(0, 1),
-        )
+            expand=True,
+            width=width,
+        ),
+        soft_wrap=True,
+        overflow="fold",
+        crop=False,
+        width=width,
     )
 
 
@@ -65,6 +77,6 @@ def render_markdown_to_string(text: str, *, force_plain: bool = True) -> str:
         from rich.markdown import Markdown
 
         with console.capture() as cap:
-            console.print(Markdown(body, code_theme="monokai"))
+            console.print(Markdown(body, code_theme="monokai"), soft_wrap=True)
         return cap.get().rstrip("\n")
     return body

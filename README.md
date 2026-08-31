@@ -72,7 +72,7 @@ codewisp-api
 常用可选参数：
 
 ```bash
-codewisp --title "My Session" --max-steps 15
+codewisp --title "My Session" --max-steps 40
 codewisp --session ses_xxx          # 续跑已有 Session
 codewisp -w /other/project          # 显式指定 Workspace（覆盖 cwd）
 codewisp --db ~/.codewisp/demo.db   # 可选：指定 SQLite 路径
@@ -128,20 +128,22 @@ pytest
 
 CodeWisp 是从零实现的编程智能体（Coding Agent）：面向自然语言编程任务，目标能力包括探索代码仓库、读写与修改代码、执行本地命令与测试，并根据结果迭代修复。实现上不封装 Claude Code / Codex 等现成产品，也不使用 LangChain、LlamaIndex、OpenAI Agents SDK、Claude Agent SDK、AutoGen、CrewAI 等 Agent 框架；对话历史、工具定义与本地执行、模型输出解析、循环终止与错误处理等关键逻辑自行编写。模型侧使用厂商官方或 OpenAI 兼容 API（当前默认对接 DeepSeek），凭据仅通过环境变量 / 未入库配置提供。
 
-### 当前能力（V0.8）
+### 当前能力（V1.0+）
 
 - **Coding Tools：** `list_files` / `glob` / `read_file` / `search_code` / `edit_file` / `write_file`
 - **受控执行：** `run_command`（Policy ALLOW / ASK / DENY）
-- **Interactive Permission：** ASK → PermissionHandler → ALLOW/DENY；CLI 与 API Broker
-- **Live Agent Event：** EventSink 实时投递；CLI 实时 Trace
-- **Self-Correction：** Observation 驱动有限迭代（LLM-driven，无语言特判）
-- **Session + SQLite 持久化：** Conversation / AgentRun / AgentStep / ToolCall；进程重启可恢复
-- **Provider / Model Domain + ModelResolver + CLI Model UX**
-- **Backend API + CLI** 共用 `AgentService`（CLI 不直连 SQLite / 不自建 Loop）
+- **Interactive Permission + Live EventSink + Streaming**
+- **Session + SQLite：** Conversation / Run / Step / ToolCall / Snapshot；进程重启可恢复
+- **Provider / Model Registry + CLI Model UX**
+- **Workspace Snapshot / Diff / Revert**（`/diff` `/revert`）
+- **Hierarchical Context：** Task / Plan / Memory / Checkpoint / Budget / Compaction（`/context` `/plan`）
+- **Semantic Memory：** 本地 embedding 索引 + hybrid 检索（`/memory search|index|rebuild|stats`）
+- **LLM Planner（旁路）：** `/plan refresh`；Loop 内启发式 replan，不改 Workspace
+- **Backend API + CLI** 共用 `AgentService`
 
 ### 当前不支持
 
-Web UI、完整 SSE / WebSocket 推送、Snapshot / Diff / Undo、Context Compression、Planning、LSP、MCP。
+完整 Web UI、MCP、LSP、Multi-Agent、外部云端 Vector DB、复杂 Reranker。
 
 可选：单独验证工具系统（无需 API Key）：
 

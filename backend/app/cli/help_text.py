@@ -31,6 +31,23 @@ HELP_TEXT = """\
   [cyan]/revert[/] step <id>    Revert one AgentStep
   [cyan]/revert[/] run <id>     Revert one AgentRun
 
+[bold]Context[/]
+  [cyan]/context[/]             Hierarchical context budget breakdown
+  [cyan]/context status[/]      Same as /context
+  [cyan]/context compact[/]     Manual compaction + checkpoint
+  [cyan]/context memory[/]      List durable memories
+  [cyan]/plan[/]                Show current Plan (✓ ● ○ ✗)
+  [cyan]/plan show[/]           Same as /plan
+  [cyan]/plan refresh[/]        Rebuild plan via Planner
+  [dim]During agent runs, Plan updates live from plan_* events; Tool Trace stays separate.[/]
+
+[bold]Memory[/]
+  [cyan]/memory[/]              Memory help
+  [cyan]/memory search[/] <q>   Hybrid semantic + keyword search
+  [cyan]/memory index[/]        Index workspace (incremental)
+  [cyan]/memory rebuild[/]      Rebuild semantic index
+  [cyan]/memory stats[/]        Index statistics
+
 [bold]Runtime[/]
   [cyan]/status[/]              Show current runtime status
 
@@ -72,6 +89,23 @@ Changes:
   /revert              Pick step/run then revert (asks permission)
   /revert step <id>    Revert one AgentStep
   /revert run <id>     Revert one AgentRun
+
+Context:
+  /context             Hierarchical context budget breakdown
+  /context status      Same as /context
+  /context compact     Manual compaction + checkpoint
+  /context memory      List durable memories
+  /plan                Show current Plan (✓ ● ○ ✗)
+  /plan show           Same as /plan
+  /plan refresh        Rebuild plan via Planner
+  During agent runs, Plan updates live from plan_* events; Tool Trace stays separate.
+
+Memory:
+  /memory              Memory help
+  /memory search <q>   Hybrid semantic + keyword search
+  /memory index        Index workspace (incremental)
+  /memory rebuild      Rebuild semantic index
+  /memory stats        Index statistics
 
 Runtime:
   /status              Show current runtime status

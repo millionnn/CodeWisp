@@ -26,6 +26,16 @@ EXPECTED_TABLES = {
     "snapshots",
     "snapshot_files",
     "file_changes",
+    "task_states",
+    "plans",
+    "plan_steps",
+    "memories",
+    "context_checkpoints",
+    "memory_sources",
+    "semantic_documents",
+    "semantic_chunks",
+    "embedding_metadata",
+    "task_summaries",
 }
 
 
@@ -43,11 +53,15 @@ def test_package_migrations_include_v1() -> None:
     assert "sessions" in migrations[0].sql
     assert any(m.version == 2 for m in migrations)
     assert "snapshots" in next(m.sql for m in migrations if m.version == 2)
+    assert any(m.version == 3 for m in migrations)
+    assert "task_states" in next(m.sql for m in migrations if m.version == 3)
+    assert any(m.version == 4 for m in migrations)
+    assert "semantic_chunks" in next(m.sql for m in migrations if m.version == 4)
 
 
 def test_sqlite_store_memory_applies_v1_schema() -> None:
     with SqliteStore(":memory:") as store:
-        assert store.schema_version() == 2
+        assert store.schema_version() == 4
         tables = _table_names(store.connection)
         assert EXPECTED_TABLES.issubset(tables)
 
@@ -55,7 +69,7 @@ def test_sqlite_store_memory_applies_v1_schema() -> None:
 def test_sqlite_store_file_migrate_and_reopen(tmp_path: Path) -> None:
     db_path = tmp_path / "codewisp.db"
     with SqliteStore(db_path) as store:
-        assert store.schema_version() == 2
+        assert store.schema_version() == 4
         store.execute(
             "INSERT INTO sessions (id, title, workspace, provider_id, model_id, status) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -64,7 +78,7 @@ def test_sqlite_store_file_migrate_and_reopen(tmp_path: Path) -> None:
 
     # 模拟进程重启：重新打开同一文件，migration 幂等，数据仍在
     with SqliteStore(db_path) as store:
-        assert store.schema_version() == 2
+        assert store.schema_version() == 4
         newly = apply_migrations(store.connection)
         assert newly == []
         row = store.execute(
@@ -247,7 +261,7 @@ def test_relation_smoke_insert_graph() -> None:
         )
         store.commit()
 
-        assert get_schema_version(store.connection) == 2
+        assert get_schema_version(store.connection) == 4
         n = store.execute(
             "SELECT COUNT(*) FROM tool_calls WHERE step_id='step_1'"
         ).fetchone()[0]
