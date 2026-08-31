@@ -7,6 +7,7 @@ from typing import Protocol
 from backend.app.changes.errors import SnapshotNotFoundError
 from backend.app.changes.models import WorkspaceSnapshot
 
+#内存里临时存快照
 
 class SnapshotStore(Protocol):
     def save(self, snapshot: WorkspaceSnapshot) -> WorkspaceSnapshot:

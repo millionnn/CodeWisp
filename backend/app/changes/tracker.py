@@ -12,6 +12,7 @@ from backend.app.workspace.workspace import Workspace
 
 WRITE_TOOLS = frozenset({"edit_file", "write_file"})
 
+#Agent 调用 edit_file/write_file 时，悄悄记下改前/改后内容
 
 @dataclass
 class TrackedWrite:

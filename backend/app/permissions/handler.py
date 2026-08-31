@@ -1,5 +1,8 @@
 """PermissionHandler：用户授权抽象（CLI / 未来 Web / API）。"""
 
+#用户授权抽象（CLI / 未来 Web / API）
+#决定怎么问用户
+
 from __future__ import annotations
 
 from typing import Protocol
@@ -20,6 +23,13 @@ class AlwaysDenyPermissionHandler:
 
     def request(self, permission: PermissionRequest) -> PermissionDecision:
         return PermissionDecision.DENY
+
+
+class AlwaysAllowPermissionHandler:
+    """API 显式 confirm 后使用：一律 ALLOW（仍须调用方先取得用户确认）。"""
+
+    def request(self, permission: PermissionRequest) -> PermissionDecision:
+        return PermissionDecision.ALLOW
 
 
 class ScriptedPermissionHandler:

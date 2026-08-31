@@ -155,3 +155,77 @@ class ModelResponse(BaseModel):
     context_window: int | None = None
     supports_tool_call: bool = True
     supports_streaming: bool = False
+
+
+# --- V0.9 Workspace Change Management（供 Web UI）---
+
+
+class FileChangeResponse(BaseModel):
+    change_id: str
+    session_id: str
+    agent_run_id: str
+    agent_step_id: str
+    path: str
+    change_type: str
+    tool_call_id: str | None = None
+    before_snapshot_id: str | None = None
+    after_snapshot_id: str | None = None
+    created_at: str | None = None
+
+
+class FileDiffResponse(BaseModel):
+    path: str
+    change_type: str
+    before: str | None = None
+    after: str | None = None
+
+
+class DiffResponse(BaseModel):
+    scope: str  # run | step
+    scope_id: str
+    files: list[FileDiffResponse] = Field(default_factory=list)
+    unified_diff: str = ""
+
+
+class SnapshotFileResponse(BaseModel):
+    path: str
+    exists: bool
+    content: str | None = None
+    size: int | None = None
+    content_hash: str | None = None
+
+
+class SnapshotResponse(BaseModel):
+    snapshot_id: str
+    workspace_root: str
+    reason: str
+    files: list[SnapshotFileResponse] = Field(default_factory=list)
+    session_id: str | None = None
+    agent_run_id: str | None = None
+    agent_step_id: str | None = None
+    tool_call_id: str | None = None
+    created_at: str | None = None
+
+
+class StepSnapshotsResponse(BaseModel):
+    step_id: str
+    before: SnapshotResponse | None = None
+    after: SnapshotResponse | None = None
+
+
+class RevertRequest(BaseModel):
+    confirm: bool = Field(
+        ...,
+        description="必须为 true 才执行回滚（等同于 Web UI 用户确认）",
+    )
+
+
+class RevertResponse(BaseModel):
+    target_type: str
+    target_id: str
+    ok: bool
+    denied: bool = False
+    safety_snapshot_id: str | None = None
+    restored_snapshot_ids: list[str] = Field(default_factory=list)
+    applied: list[str] = Field(default_factory=list)
+    failed: list[dict[str, str]] = Field(default_factory=list)

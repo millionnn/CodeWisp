@@ -6,6 +6,8 @@ import difflib
 
 from backend.app.changes.models import ChangeType, FileDiff, SnapshotFile, WorkspaceSnapshot
 
+#比较两个版本，算出「新增 / 修改 / 删除」，并生成 diff 文本
+
 #比较两个 Snapshot（或 path→SnapshotFile 映射）
 def compute_file_diffs(
     before: WorkspaceSnapshot | dict[str, SnapshotFile],

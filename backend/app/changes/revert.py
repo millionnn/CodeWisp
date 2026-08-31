@@ -20,7 +20,7 @@ from backend.app.workspace.workspace import Workspace
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
-
+#回滚逻辑：先拍安全快照 → 问权限 → 恢复 → 记审计
 class RevertService:
     """基于 pre_step Snapshot 恢复工作区；经 PermissionHandler 与 Workspace。"""
 

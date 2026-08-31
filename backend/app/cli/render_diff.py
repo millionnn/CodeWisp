@@ -1,4 +1,4 @@
-"""CLI Diff 展示（参考 OpenCode / Claude：按文件分块、行号、+/− 着色）。"""
+"""CLI Diff 展示。"""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from backend.app.cli.theme import get_theme, make_console
 
 _HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
+#在终端里把 diff 画好看：文件块、绿+/红-、行号、统计
 
 def _count_line_stats(diff: FileDiff) -> tuple[int, int]:
     adds = dels = 0

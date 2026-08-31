@@ -13,6 +13,12 @@ from backend.app.session.errors import (
     SessionNotFoundError,
 )
 from backend.app.permissions.errors import PermissionError as DomainPermissionError
+from backend.app.changes.errors import (
+    ChangeError,
+    RevertError,
+    SnapshotNotFoundError,
+)
+from backend.app.persistence.errors import NotFoundError as PersistenceNotFoundError
 
 
 #注册一个异常处理
@@ -23,6 +29,38 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=404,
             content={"error": "SESSION_NOT_FOUND", "detail": str(exc)},
+        )
+
+    @app.exception_handler(PersistenceNotFoundError)
+    async def _persistence_not_found(
+        _request: Request, exc: PersistenceNotFoundError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "NOT_FOUND", "detail": str(exc)},
+        )
+
+    @app.exception_handler(SnapshotNotFoundError)
+    async def _snapshot_not_found(
+        _request: Request, exc: SnapshotNotFoundError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "SNAPSHOT_NOT_FOUND", "detail": str(exc)},
+        )
+
+    @app.exception_handler(RevertError)
+    async def _revert_error(_request: Request, exc: RevertError) -> JSONResponse:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "REVERT_ERROR", "detail": str(exc)},
+        )
+
+    @app.exception_handler(ChangeError)
+    async def _change_error(_request: Request, exc: ChangeError) -> JSONResponse:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "CHANGE_ERROR", "detail": str(exc)},
         )
 
     #session无效异常处理

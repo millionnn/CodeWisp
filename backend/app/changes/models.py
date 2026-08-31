@@ -3,7 +3,7 @@
 仅内存表示与序列化；不访问 SQLite / Git。
 """
 
-#确定快照状态的模型
+#数据结构：定义快照、文件差异、回滚结果长啥样
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def _optional_str(data: dict[str, Any], key: str) -> str | None:
 def content_sha256(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-
+#变更类型：新增、修改、删除、未修改
 class ChangeType(str, Enum):
     ADDED = "ADDED"
     MODIFIED = "MODIFIED"
@@ -45,7 +45,7 @@ class ChangeType(str, Enum):
 def _path_segments(path: str) -> list[str]:
     return [p for p in path.split("/") if p]
 
-
+#快照文件：文件路径、是否存在、内容、大小、内容哈希
 @dataclass(frozen=True)
 class SnapshotFile:
     """单个文件在某一 Snapshot 中的状态。"""
@@ -72,6 +72,7 @@ class SnapshotFile:
             if self.content_hash is None:
                 object.__setattr__(self, "content_hash", content_sha256(self.content))
 
+    #创建快照文件：存在、不存在
     @classmethod
     def present(cls, path: str, content: str) -> SnapshotFile:
         return cls(
@@ -95,6 +96,7 @@ class SnapshotFile:
             "content_hash": self.content_hash,
         }
 
+    #从字典创建快照文件
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SnapshotFile:
         if not isinstance(data, dict):
@@ -108,7 +110,7 @@ class SnapshotFile:
             content_hash=data.get("content_hash") if exists else None,
         )
 
-
+#工作区快照：快照ID、工作区根路径、变更原因、文件列表、会话ID、Agent运行ID、Agent步骤ID、工具调用ID、创建时间
 @dataclass(frozen=True)
 class WorkspaceSnapshot:
     """某次工作区文件状态快照（显式 path 集合）。"""
@@ -188,6 +190,7 @@ class WorkspaceSnapshot:
         )
 
 
+#文件变更记录：变更ID、会话ID、Agent运行ID、Agent步骤ID、路径、变更类型、工具调用ID、变更前快照ID、变更后快照ID、创建时间
 @dataclass(frozen=True)
 class FileChangeRecord:
     """一次写工具导致的文件变更（可持久化）。"""
@@ -217,7 +220,7 @@ class FileChangeRecord:
             "created_at": self.created_at,
         }
 
-
+#文件差异：路径、变更类型、变更前内容、变更后内容
 @dataclass(frozen=True)
 class FileDiff:
     path: str
@@ -233,7 +236,7 @@ class FileDiff:
             "after": self.after,
         }
 
-
+#回滚报告：快照ID、应用的文件、失败的文件
 @dataclass(frozen=True)
 class RestoreReport:
     """多文件 restore 的 best-effort 报告（非事务）。"""
@@ -246,7 +249,7 @@ class RestoreReport:
     def ok(self) -> bool:
         return len(self.failed) == 0
 
-
+#
 @dataclass(frozen=True)
 class RevertReport:
     """一次 revert step/run 的结果（不删除历史记录）。"""
