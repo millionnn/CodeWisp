@@ -1,5 +1,6 @@
 """CliPermissionHandler：终端交互式授权（方向键或 y/n）。"""
 
+#在终端中怎么问用户（方向键或 y/n）
 from __future__ import annotations
 
 from collections.abc import Callable

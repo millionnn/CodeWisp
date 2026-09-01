@@ -1,5 +1,5 @@
 """ConversationRepository：按 Session 追加 / 加载消息。"""
-
+#对于session中的消息的增删改查操作
 from __future__ import annotations
 
 import sqlite3
@@ -16,6 +16,7 @@ class ConversationRepository:
     def __init__(self, store: SqliteStore) -> None:
         self._store = store
 
+#确保session存在
     def _ensure_session(self, session_id: str) -> None:
         row = self._store.execute(
             "SELECT 1 FROM sessions WHERE id = ?",
@@ -24,6 +25,7 @@ class ConversationRepository:
         if row is None:
             raise NotFoundError(f"Session 不存在: {session_id}")
 
+#获取下一个消息序列号
     def next_seq(self, session_id: str) -> int:
         self._ensure_session(session_id)
         row = self._store.execute(
@@ -32,6 +34,7 @@ class ConversationRepository:
         ).fetchone()
         return int(row["max_seq"]) + 1
 
+#追加一条消息
     def append_message(self, session_id: str, message: Message) -> Message:
         """追加一条消息；自动补齐 message_id / seq / session_id / created_at。"""
         self._ensure_session(session_id)
@@ -92,6 +95,7 @@ class ConversationRepository:
             raise RepositoryError(f"追加消息失败: {exc}") from exc
         return stored
 
+#获取多个消息
     def list_messages(self, session_id: str) -> list[Message]:
         self._ensure_session(session_id)
         rows = self._store.execute(
@@ -104,9 +108,11 @@ class ConversationRepository:
         ).fetchall()
         return [_row_to_message(row) for row in rows]
 
+#加载一个对话消息列表
     def load_conversation(self, session_id: str) -> Conversation:
         return Conversation(messages=self.list_messages(session_id))
 
+#获取消息数量
     def count_messages(self, session_id: str) -> int:
         self._ensure_session(session_id)
         row = self._store.execute(
@@ -115,7 +121,7 @@ class ConversationRepository:
         ).fetchone()
         return int(row["n"])
 
-
+#将数据库行转换为消息对象
 def _row_to_message(row: sqlite3.Row) -> Message:
     raw_calls = loads_json(row["tool_calls_json"], default=[])
     if raw_calls is None:

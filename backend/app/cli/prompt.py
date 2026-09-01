@@ -62,11 +62,11 @@ def read_line(
         kwargs: dict = {}
         if bottom_toolbar is not None:
             kwargs["bottom_toolbar"] = bottom_toolbar
-            # OpenCode-like muted footer
             kwargs["style"] = PtStyle.from_dict(
                 {
-                    "bottom-toolbar": "noreverse fg:#808080",
-                    "bottom-toolbar.text": "noreverse fg:#808080",
+                    # 透明底栏（noreverse 取消默认反色底），前景由 FormattedText 控制
+                    "bottom-toolbar": "noreverse",
+                    "bottom-toolbar.text": "noreverse fg:#94a3b8",
                 }
             )
 

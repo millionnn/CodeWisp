@@ -1,5 +1,7 @@
 """PermissionRequest：ASK 时交给 PermissionHandler 的授权请求。"""
 
+#ASK 时交给 PermissionHandler 的授权请求(我想执行这条命令的申请单)
+
 from __future__ import annotations
 
 import uuid
@@ -15,7 +17,7 @@ def _utc_now_iso() -> str:
 def new_permission_request_id() -> str:
     return f"perm_{uuid.uuid4().hex}"
 
-
+#权限请求
 @dataclass(frozen=True)
 class PermissionRequest:
     """一次需要用户确认的操作请求（不含凭据）。"""

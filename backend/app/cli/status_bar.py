@@ -1,7 +1,7 @@
 """OpenCode 风格 CLI Footer：左 workspace，右 session / model / tokens。
 
 参考 OpenCode TUI footer（space-between）：
-  ~/project                          title · model · 19.1k/58.9k 32%
+  ~/project                          title · model · ctx 19100/58900
 
 固定在输入区下方（prompt_toolkit bottom_toolbar），不占用对话区。
 """
@@ -11,9 +11,19 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from backend.app.cli.theme import get_theme, make_console, terminal_width
 from backend.app.session.models import Session
+
+# prompt_toolkit bottom_toolbar 内联色（透明底，仅前景分色）
+_BASE = "noreverse"
+_STY_PATH = f"fg:#2dd4bf bold {_BASE}"
+_STY_TITLE = f"fg:#94a3b8 {_BASE}"
+_STY_SEP = f"fg:#64748b {_BASE}"
+_STY_MODEL = f"fg:#67e8f9 {_BASE}"
+_STY_CTX = f"fg:#fbbf24 {_BASE}"
+_STY_GAP = _BASE
 
 
 @dataclass
@@ -26,48 +36,75 @@ class StatusSnapshot:
     context_budget: int | None = None
 
     def left(self) -> str:
-        return _short_path(self.workspace) or "—"
+        return _home_path(self.workspace) or "—"
 
-    def right(self) -> str:
-        parts: list[str] = []
+    def title_part(self) -> str:
         title = (self.title or "").strip() or "—"
         if len(title) > 20:
             title = title[:19] + "…"
-        parts.append(title)
+        return title
+
+    def model_part(self) -> str:
         model = self.model or "—"
-        # OpenCode 风格：优先短 model id
         if "/" in model:
             model = model.split("/", 1)[-1]
         if len(model) > 22:
             model = model[:21] + "…"
-        parts.append(model)
-        parts.append(self.context_label())
-        return " · ".join(parts)
+        return model
+
+    def right(self) -> str:
+        return " · ".join(
+            [self.title_part(), self.model_part(), self.context_label()]
+        )
 
     def context_label(self) -> str:
-        if self.context_used is None or self.context_budget is None or self.context_budget <= 0:
-            return "ctx —"
-        used = _fmt_k(self.context_used)
-        budget = _fmt_k(self.context_budget)
-        pct = int(round(100.0 * self.context_used / self.context_budget))
-        return f"{used}/{budget} {pct}%"
+        """完整整数 token，不缩写成 k。"""
+        used = self.context_used
+        budget = self.context_budget
+        if used is None and (budget is None or budget <= 0):
+            return "ctx 0"
+        if used is None:
+            used = 0
+        if budget is None or budget <= 0:
+            return f"ctx {used:,}"
+        return f"ctx {used:,}/{budget:,}"
 
     def line(self, *, width: int | None = None) -> str:
         """单行 footer：左 path，右状态，中间空格填充（优先保证右侧完整）。"""
         right = self.right()
         w = width or terminal_width(fallback=get_theme().width)
         max_left = max(8, w - len(right) - 2)
-        left = self.left()
-        if len(left) > max_left:
-            left = _short_path(self.workspace, max_len=max_left) or left[:max_left]
-            if len(left) > max_left:
-                left = "…" + left[-(max_left - 1) :]
+        left = _fit_path(self.workspace, max_left)
         gap = w - len(left) - len(right)
         if gap < 1:
             gap = 1
-            # 极端窄屏：截右侧
             right = right[: max(0, w - len(left) - 1)]
         return f"{left}{' ' * gap}{right}"
+
+    def formatted(self, *, width: int | None = None) -> Any:
+        """prompt_toolkit FormattedText：分色左 path / 右 title·model·ctx。"""
+        from prompt_toolkit.formatted_text import FormattedText
+
+        title = self.title_part()
+        model = self.model_part()
+        ctx = self.context_label()
+        right_plain = f"{title} · {model} · {ctx}"
+        w = width or terminal_width(fallback=get_theme().width)
+        max_left = max(8, w - len(right_plain) - 2)
+        left = _fit_path(self.workspace, max_left)
+        gap = max(1, w - len(left) - len(right_plain))
+        return FormattedText(
+            [
+                (_STY_PATH, f" {left}"),
+                (_STY_GAP, " " * max(0, gap - 1)),
+                (_STY_TITLE, title),
+                (_STY_SEP, " · "),
+                (_STY_MODEL, model),
+                (_STY_SEP, " · "),
+                (_STY_CTX, ctx),
+                (_STY_GAP, " "),
+            ]
+        )
 
 
 @dataclass
@@ -94,40 +131,50 @@ class StatusBarState:
         self.snapshot.context_used = used
         self.snapshot.context_budget = budget
 
-    def toolbar_text(self) -> str:
-        """prompt_toolkit bottom_toolbar 用纯文本（含填充空格）。"""
-        return self.snapshot.line()
+    def toolbar_text(self) -> Any:
+        """prompt_toolkit bottom_toolbar：彩色 FormattedText。"""
+        return self.snapshot.formatted()
 
     def print_line(self, output_fn: Callable[[str], None] = print) -> None:
         line = self.snapshot.line()
         if output_fn is print and get_theme().rich_enabled:
-            left = self.snapshot.left()
-            right = self.snapshot.right()
             w = terminal_width(fallback=get_theme().width)
-            gap = max(1, w - len(left) - len(right))
+            title = self.snapshot.title_part()
+            model = self.snapshot.model_part()
+            ctx = self.snapshot.context_label()
+            right_len = len(f"{title} · {model} · {ctx}")
+            left = _fit_path(self.snapshot.workspace, max(8, w - right_len - 2))
+            gap = max(1, w - len(left) - right_len)
             console = make_console(width=w)
             console.print(
-                f"[cw.dim]{left}[/]{' ' * gap}[cw.dim]{right}[/]",
+                f"[cw.brand]{left}[/]{' ' * gap}"
+                f"[cw.value]{title}[/][cw.dim] · [/]"
+                f"[cw.info]{model}[/][cw.dim] · [/]"
+                f"[cw.warn]{ctx}[/]",
                 highlight=False,
             )
             return
         output_fn(line)
 
 
-def _short_path(path: str, *, max_len: int = 28) -> str:
-    """OpenCode 风格：优先 ~/…/basename 或 basename。"""
+def _home_path(path: str) -> str:
+    """把绝对路径收成 ~/… 形式（不截断）。"""
     if not path:
         return ""
     try:
         p = Path(path).expanduser().resolve()
         home = Path.home().resolve()
         try:
-            rel = p.relative_to(home)
-            text = f"~/{rel.as_posix()}"
+            return f"~/{p.relative_to(home).as_posix()}"
         except ValueError:
-            text = str(p)
+            return str(p)
     except OSError:
-        text = path
+        return path
+
+
+def _fit_path(path: str, max_len: int) -> str:
+    """按可用宽度截断路径；优先保留 ~/ 与末段目录名。"""
+    text = _home_path(path) or "—"
     if len(text) <= max_len:
         return text
     name = Path(text).name
@@ -136,12 +183,6 @@ def _short_path(path: str, *, max_len: int = 28) -> str:
     if len(name) >= max_len:
         return "…" + name[-(max_len - 1) :]
     return "…" + text[-(max_len - 1) :]
-
-
-def _fmt_k(n: int) -> str:
-    if n >= 1000:
-        return f"{n / 1000:.1f}k"
-    return str(n)
 
 
 def summarize_session_title(message: str, *, max_len: int = 48) -> str:

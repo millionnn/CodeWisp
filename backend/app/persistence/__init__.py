@@ -1,5 +1,5 @@
 """SQLite 持久化层（V0.6）。
-
+导出所有持久化相关模块和函数，方便其他模块使用。
 Phase 2-B：SqliteStore + migration。
 Phase 2-C：Repositories。
 """

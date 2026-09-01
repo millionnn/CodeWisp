@@ -36,6 +36,7 @@ class SqliteStore:
     def is_open(self) -> bool:
         return self._conn is not None
 
+#打开连接；必要时创建父目录并运行 migration。
     def connect(self) -> sqlite3.Connection:
         """打开连接；必要时创建父目录并运行 migration。"""
         if self._conn is not None:
@@ -69,24 +70,30 @@ class SqliteStore:
             apply_migrations(conn, directory=self._migrations_dir)
         return conn
 
+#获取连接
     @property
     def connection(self) -> sqlite3.Connection:
         if self._conn is None:
             raise PersistenceError("SqliteStore 尚未 connect()")
         return self._conn
 
+#获取当前数据库的 schema 版本
     def schema_version(self) -> int:
         return get_schema_version(self.connection)
 
+#执行 SQL 语句
     def execute(self, sql: str, parameters: tuple | list | dict = ()) -> sqlite3.Cursor:
         return self.connection.execute(sql, parameters)
 
+#执行 SQL 脚本
     def executescript(self, sql: str) -> sqlite3.Cursor:
         return self.connection.executescript(sql)
 
+#提交事务
     def commit(self) -> None:
         self.connection.commit()
 
+#关闭连接
     def close(self) -> None:
         if self._conn is not None:
             self._conn.close()
@@ -96,6 +103,7 @@ class SqliteStore:
         self.connect()
         return self
 
+#退出上下文管理器
     def __exit__(
         self,
         exc_type: type[BaseException] | None,

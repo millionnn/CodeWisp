@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from backend.app.cli.theme import get_theme, make_console, terminal_width
+from backend.app.cli.theme import (
+    BORDER_ACCENT,
+    get_theme,
+    make_console,
+    styled_panel,
+    terminal_width,
+)
 
 
 def looks_like_markdown(text: str) -> bool:
@@ -44,7 +50,6 @@ def render_markdown(
         return
 
     from rich.markdown import Markdown
-    from rich.panel import Panel
     from rich.text import Text
 
     width = terminal_width()
@@ -55,13 +60,13 @@ def render_markdown(
         content = Text(body, overflow="fold", no_wrap=False)
 
     console.print(
-        Panel(
+        styled_panel(
             content,
             title="[cw.plan]✦ Final Answer[/]",
-            border_style="cyan",
-            padding=(0, 1),
-            expand=True,
+            border=BORDER_ACCENT,
+            padding=(1, 2),
             width=width,
+            subtitle="[cw.dim]CodeWisp[/]",
         ),
         soft_wrap=True,
         overflow="fold",

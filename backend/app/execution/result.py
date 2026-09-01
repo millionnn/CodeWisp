@@ -25,7 +25,7 @@ class ExecutionResult:
     def to_dict(self) -> dict[str, Any]:#将结果转换为字典
         return asdict(self)
 
-
+#权限请求
 @dataclass(frozen=True)
 class PermissionRequired:
     """策略判定为 ASK：不执行命令，仅返回授权请求（供未来 Web UI）。"""

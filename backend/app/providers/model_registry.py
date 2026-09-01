@@ -11,6 +11,7 @@ from backend.app.providers.errors import (
 from backend.app.providers.model import Model
 
 
+#根据供应商找支持的模型
 class ModelRegistry:
     """按 (provider_id, model_id) 注册与查找 Model。"""
 

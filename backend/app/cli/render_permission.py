@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from backend.app.cli.theme import get_theme, make_console
+from backend.app.cli.theme import BORDER_WARN, get_theme, make_console, styled_panel
 from backend.app.permissions.request import PermissionRequest
 
 #权限请求怎么打印
@@ -23,25 +23,26 @@ def render_permission_prompt(
     )
 
     if use_rich:
-        from rich.panel import Panel
         from rich.text import Text
 
         body = Text()
-        body.append("Command\n", style="cw.key")
-        body.append(f"  $ {argv}\n\n", style="cw.cmd")
-        body.append("Working directory\n", style="cw.key")
-        body.append(f"  {cwd}\n\n", style="cw.value")
-        body.append("Reason\n", style="cw.key")
-        body.append(f"  {reason}\n\n", style="cw.dim")
-        body.append("[y] Allow once    [n] Deny", style="cw.warn")
+        body.append("  ⌘  Command\n", style="cw.key")
+        body.append(f"     $ {argv}\n\n", style="cw.cmd")
+        body.append("  📂  Working directory\n", style="cw.key")
+        body.append(f"     {cwd}\n\n", style="cw.value")
+        body.append("  💬  Reason\n", style="cw.key")
+        body.append(f"     {reason}\n\n", style="cw.dim")
+        body.append("  [y] Allow once", style="cw.ok")
+        body.append("    ", style="cw.dim")
+        body.append("[n] Deny", style="cw.fail")
 
         console = make_console()
         console.print()
         console.print(
-            Panel(
+            styled_panel(
                 body,
                 title="[cw.warn]⚠ Permission required[/]",
-                border_style="yellow",
+                border=BORDER_WARN,
                 padding=(1, 2),
             )
         )

@@ -1,4 +1,6 @@
-"""稳定领域 ID 生成（与厂商 tool_call id、内存 step 下标解耦）。
+"""
+引入session，表示对话的管理对象
+稳定领域 ID 生成（与厂商 tool_call id、内存 step 下标解耦）。
 
 格式：``{prefix}_{32-hex}``，例如 ``tc_a1b2...``、``step_...``。
 供持久化与未来 Snapshot/Undo 关联；不依赖 SQLite。
@@ -9,6 +11,7 @@ from __future__ import annotations
 import uuid
 
 
+#生成带前缀的稳定唯一 ID
 def new_id(prefix: str) -> str:
     """生成带前缀的稳定唯一 ID。"""
     p = (prefix or "").strip().rstrip("_")

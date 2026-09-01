@@ -7,6 +7,7 @@ from pathlib import Path
 from backend.app.git.models import GitRepositoryInfo
 
 
+# 检测Git仓库
 class GitDetector:
     """Detect whether a workspace is inside a Git repository."""
 

@@ -155,10 +155,10 @@ def _select_arrows(
 
     style = Style.from_dict(
         {
-            "title": "bold cyan",
-            "hint": "italic #6b7280",
-            "selected": "bold reverse cyan",
-            "item": "#d1d5db",
+            "title": "bold #2dd4bf",
+            "hint": "italic #64748b",
+            "selected": "bold reverse #2dd4bf",
+            "item": "#94a3b8",
         }
     )
     control = FormattedTextControl(_render, focusable=True)

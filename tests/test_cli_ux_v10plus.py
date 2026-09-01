@@ -41,13 +41,18 @@ def test_opencode_style_footer() -> None:
     bar.snapshot.title = "my task title that is quite long for display"
     bar.snapshot.model = "deepseek/deepseek-chat"
     bar.update_context(used=19100, budget=58900)
-    line = bar.snapshot.line(width=100)
+    line = bar.snapshot.line(width=120)
     assert "codewisp-test-repo" in line
     assert "deepseek-chat" in line
-    assert "19.1k" in line
-    assert "32%" in line or "33%" in line
+    # 完整 token，不缩写成 k
+    assert "ctx 19,100/58,900" in line
+    assert "19.1k" not in line
     right = bar.snapshot.right()
     assert " · " in right
+    assert bar.snapshot.context_label() == "ctx 19,100/58,900"
+    # 未知用量时显示 0，不出现 —
+    bar.update_context(used=None, budget=None)
+    assert bar.snapshot.context_label() == "ctx 0"
 
 
 def test_terminal_width_follows_window(monkeypatch) -> None:

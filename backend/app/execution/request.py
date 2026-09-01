@@ -7,9 +7,9 @@ from typing import Any, Mapping
 
 from backend.app.execution.errors import InvalidExecutionRequestError
 
-DEFAULT_TIMEOUT_SECONDS = 30.0
-MAX_TIMEOUT_SECONDS = 120.0
-MIN_TIMEOUT_SECONDS = 0.1
+DEFAULT_TIMEOUT_SECONDS = 30.0#默认超时时间
+MAX_TIMEOUT_SECONDS = 120.0#最大超时时间
+MIN_TIMEOUT_SECONDS = 0.1#最小超时时间
 
 
 @dataclass(frozen=True)
@@ -26,6 +26,7 @@ class ExecutionRequest:
     timeout: float = DEFAULT_TIMEOUT_SECONDS
     env: Mapping[str, str] | None = None
 
+#初始化，规范化字段
     def __post_init__(self) -> None:
         # frozen dataclass：用 object.__setattr__ 规范化字段
         cmd = (self.command or "").strip()
@@ -52,6 +53,7 @@ class ExecutionRequest:
                 {str(k): str(v) for k, v in dict(self.env).items()},
             )
 
+#校验请求
     def validate(self) -> None:
         """校验请求；非法时抛出 InvalidExecutionRequestError。"""
         if not self.command:
@@ -65,10 +67,12 @@ class ExecutionRequest:
                 f"timeout 超过上限（最大 {MAX_TIMEOUT_SECONDS}s）。"
             )
 
+#将请求转换为列表
     def argv(self) -> list[str]:
         """返回 subprocess 用的 [command, *args]。"""
         return [self.command, *self.args]
 
+#将请求转换为字典
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["args"] = list(self.args)

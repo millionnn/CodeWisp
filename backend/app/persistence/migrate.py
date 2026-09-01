@@ -19,13 +19,13 @@ from backend.app.persistence.errors import MigrationError
 
 _MIGRATION_NAME_RE = re.compile(r"^(\d+)_(.+)\.sql$", re.IGNORECASE)
 
-
+#数据库迁移脚本
 @dataclass(frozen=True)
 class Migration:
-    version: int
-    name: str
-    sql: str
-    source: str
+    version: int#版本号
+    name: str#名称
+    sql: str#SQL语句
+    source: str#来源
 
 
 def _utc_now_iso() -> str:
@@ -38,7 +38,7 @@ def _parse_migration_filename(filename: str) -> tuple[int, str] | None:
         return None
     return int(match.group(1)), match.group(2)
 
-
+#加载并排序 migration 脚本
 def load_migrations(
     directory: Path | None = None,
 ) -> list[Migration]:
@@ -50,7 +50,7 @@ def load_migrations(
         return _load_from_directory(directory)
     return _load_from_package()
 
-
+#从指定目录加载 migration 脚本
 def _load_from_directory(directory: Path) -> list[Migration]:
     if not directory.is_dir():
         raise MigrationError(f"migration 目录不存在: {directory}")
@@ -72,7 +72,7 @@ def _load_from_directory(directory: Path) -> list[Migration]:
         )
     return _validate_unique_versions(migrations)
 
-
+#从包内加载 migration 脚本
 def _load_from_package() -> list[Migration]:
     package = resources.files("backend.app.persistence.migrations")
     migrations: list[Migration] = []
@@ -94,7 +94,7 @@ def _load_from_package() -> list[Migration]:
     migrations.sort(key=lambda m: m.version)
     return _validate_unique_versions(migrations)
 
-
+#验证 migration 脚本的版本是否唯一
 def _validate_unique_versions(migrations: list[Migration]) -> list[Migration]:
     migrations = sorted(migrations, key=lambda m: m.version)
     seen: set[int] = set()
@@ -106,7 +106,7 @@ def _validate_unique_versions(migrations: list[Migration]) -> list[Migration]:
         seen.add(item.version)
     return migrations
 
-
+#确保 migrations 表存在
 def ensure_migrations_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -118,18 +118,18 @@ def ensure_migrations_table(conn: sqlite3.Connection) -> None:
         """
     )
 
-
+#获取已应用的 migration 版本
 def get_applied_versions(conn: sqlite3.Connection) -> set[int]:
     ensure_migrations_table(conn)
     rows = conn.execute("SELECT version FROM schema_migrations").fetchall()
     return {int(row[0]) for row in rows}
 
-
+#获取当前数据库的 schema 版本
 def get_schema_version(conn: sqlite3.Connection) -> int:
     applied = get_applied_versions(conn)
     return max(applied) if applied else 0
 
-
+#应用所有未执行的 migration；返回本次新应用的 version 列表
 def apply_migrations(
     conn: sqlite3.Connection,
     *,

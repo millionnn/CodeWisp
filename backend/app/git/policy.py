@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 
+# Git操作权限
 class GitPolicyAction(str, Enum):
     ALLOW = "allow"
     ASK = "ask"

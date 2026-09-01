@@ -6,36 +6,49 @@ import os
 import sys
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Any
 
 from rich.console import Console
 from rich.theme import Theme
 
-#cli主题
+# ── 品牌色：青绿主调 + 琥珀警告，避免紫系 AI 默认观感 ──────────────
+# 边框 / 标题在 TTY 下用 truecolor；mono / NO_COLOR 走纯文本路径。
 
 CODEWISP_THEME = Theme(
     {
-        "cw.brand": "bold cyan",
-        "cw.dim": "dim",
-        "cw.ok": "bold green",
-        "cw.fail": "bold red",
-        "cw.warn": "bold yellow",
-        "cw.info": "cyan",
-        "cw.user": "bold blue",
-        "cw.agent": "bold cyan",
-        "cw.key": "dim",
-        "cw.value": "white",
-        "cw.cmd": "bold white",
-        "cw.step": "dim",
-        "cw.plan": "bold cyan",
-        "cw.tool": "dim cyan",
-        "cw.diff.file": "bold white",
-        "cw.diff.add": "green",
-        "cw.diff.del": "red",
-        "cw.diff.hunk": "cyan",
-        "cw.diff.meta": "dim",
-        "cw.diff.stat": "bold",
+        "cw.brand": "bold #2dd4bf",
+        "cw.dim": "dim #94a3b8",
+        "cw.ok": "bold #34d399",
+        "cw.fail": "bold #f87171",
+        "cw.warn": "bold #fbbf24",
+        "cw.info": "#38bdf8",
+        "cw.user": "bold #60a5fa",
+        "cw.agent": "bold #2dd4bf",
+        "cw.key": "dim #64748b",
+        "cw.value": "#e2e8f0",
+        "cw.cmd": "bold #f1f5f9",
+        "cw.step": "dim #64748b",
+        "cw.plan": "bold #2dd4bf",
+        "cw.tool": "dim #67e8f9",
+        "cw.border": "#334155",
+        "cw.border.accent": "#2dd4bf",
+        "cw.border.warn": "#fbbf24",
+        "cw.border.ok": "#34d399",
+        "cw.diff.file": "bold #e2e8f0",
+        "cw.diff.add": "#34d399",
+        "cw.diff.del": "#f87171",
+        "cw.diff.hunk": "#38bdf8",
+        "cw.diff.meta": "dim #64748b",
+        "cw.diff.stat": "bold #e2e8f0",
+        "cw.rule": "dim #475569",
     }
 )
+
+# Panel 边框语义色（传给 border_style）
+BORDER_ACCENT = "cw.border.accent"
+BORDER_MUTED = "cw.border"
+BORDER_WARN = "cw.border.warn"
+BORDER_OK = "cw.border.ok"
 
 
 @dataclass(frozen=True)
@@ -111,3 +124,40 @@ def style(text: str, style_name: str, *, force_plain: bool = False) -> str:
     with console.capture() as cap:
         console.print(text, style=style_name, end="")
     return cap.get()
+
+
+def panel_box():
+    """统一圆角边框（Rich box）。"""
+    from rich import box
+
+    return box.ROUNDED
+
+
+def styled_panel(
+    renderable: Any,
+    *,
+    title: str | None = None,
+    subtitle: str | None = None,
+    border: str = BORDER_ACCENT,
+    padding: tuple[int, int] = (0, 1),
+    expand: bool = True,
+    width: int | None = None,
+) -> Any:
+    """带统一圆角 / 左对齐标题的 Panel。"""
+    from rich.panel import Panel
+
+    kwargs: dict[str, Any] = {
+        "border_style": border,
+        "padding": padding,
+        "expand": expand,
+        "box": panel_box(),
+    }
+    if title is not None:
+        kwargs["title"] = title
+        kwargs["title_align"] = "left"
+    if subtitle is not None:
+        kwargs["subtitle"] = subtitle
+        kwargs["subtitle_align"] = "right"
+    if width is not None:
+        kwargs["width"] = width
+    return Panel(renderable, **kwargs)

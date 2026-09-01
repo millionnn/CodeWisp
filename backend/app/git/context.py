@@ -7,7 +7,7 @@ from backend.app.git.models import GitRepositoryInfo, GitStatus
 from backend.app.git.service import GitService
 from backend.app.workspace.workspace import Workspace
 
-
+# 获取Git仓库的上下文信息
 class GitContextProvider:
     """Build Git metadata summary (no full diff)."""
 
@@ -27,6 +27,7 @@ class GitContextProvider:
     def cached(self) -> str | None:
         return self._cached_text
 
+# 构建Git仓库的上下文信息
     def build_workspace_context(self) -> str:
         info = GitDetector.detect(self._workspace.root)
         if not info.is_git_repository:

@@ -7,7 +7,7 @@ import re
 from collections.abc import Callable
 
 from backend.app.changes.models import ChangeType, FileDiff
-from backend.app.cli.theme import get_theme, make_console
+from backend.app.cli.theme import BORDER_MUTED, get_theme, make_console, styled_panel
 
 _HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
@@ -137,7 +137,7 @@ def render_file_diffs(
     if use_rich:
         console = make_console()
         console.print(
-            f"[cw.info]{title}[/]  "
+            f"[cw.brand]±[/] [cw.info]{title}[/]  "
             f"[cw.diff.stat]{len(real)} file(s)[/]  "
             f"[cw.diff.add]+{total_add}[/] "
             f"[cw.diff.del]-{total_del}[/]"
@@ -160,13 +160,21 @@ def _badge(change: ChangeType) -> str:
     }.get(change, "?")
 
 
+def _badge_style(change: ChangeType) -> str:
+    return {
+        ChangeType.ADDED: "bold reverse #34d399",
+        ChangeType.DELETED: "bold reverse #f87171",
+        ChangeType.MODIFIED: "bold reverse #38bdf8",
+        ChangeType.UNCHANGED: "bold reverse #64748b",
+    }.get(change, "bold reverse")
+
+
 def _render_one_rich(console, item: FileDiff) -> None:
-    from rich.panel import Panel
     from rich.text import Text
 
     adds, dels = _count_line_stats(item)
     header = Text()
-    header.append(f" {_badge(item.change_type)} ", style="bold reverse")
+    header.append(f" {_badge(item.change_type)} ", style=_badge_style(item.change_type))
     header.append(f" {item.path} ", style="cw.diff.file")
     header.append(f" +{adds} ", style="cw.diff.add")
     header.append(f"-{dels}", style="cw.diff.del")
@@ -196,11 +204,10 @@ def _render_one_rich(console, item: FileDiff) -> None:
             body.append(f"  {text}\n", style="cw.dim")
 
     console.print(
-        Panel(
+        styled_panel(
             body,
             title=header,
-            title_align="left",
-            border_style="dim",
+            border=BORDER_MUTED,
             padding=(0, 1),
         )
     )

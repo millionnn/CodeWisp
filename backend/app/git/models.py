@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Any
 
 
+# 文件变更类型
 class GitFileChangeType(str, Enum):
     ADDED = "added"
     MODIFIED = "modified"
@@ -16,6 +17,7 @@ class GitFileChangeType(str, Enum):
     COPIED = "copied"
 
 
+# Git仓库信息
 @dataclass(frozen=True)
 class GitRepositoryInfo:
     """Repository detection result."""
@@ -32,6 +34,7 @@ class GitRepositoryInfo:
         }
 
 
+# 文件状态
 @dataclass(frozen=True)
 class GitFileStatus:
     path: str
@@ -71,6 +74,7 @@ class GitFileStatus:
         return f"{prefix}{self.path}".strip()
 
 
+# Git状态
 @dataclass
 class GitStatus:
     repository_root: str

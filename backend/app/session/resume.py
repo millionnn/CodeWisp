@@ -3,7 +3,7 @@
 进程重启后通过 ``SessionService.resume_session`` 加载，
 再调用 ``AgentService.run`` 即可在完整历史上继续。
 """
-
+#退出一个session后，重新进入，恢复一个session
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,6 +12,7 @@ from backend.app.llm.messages import Conversation
 from backend.app.session.models import AgentRun, Session
 
 
+#一次Session恢复所需的只读快照
 @dataclass(frozen=True)
 class SessionResumeState:
     """一次 Session 恢复所需的只读快照。"""

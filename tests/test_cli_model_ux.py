@@ -152,12 +152,9 @@ def test_cli_session_model_isolation(
         if n == 0:
             return "task-a"
         if n == 1:
-            for line in outputs:
-                for token in line.split():
-                    if token.startswith("ses_"):
-                        ids["a"] = token
-                        break
-                if "a" in ids:
+            for s in agents.sessions.list_sessions():
+                if s.title == "Session A":
+                    ids["a"] = s.session_id
                     break
             return "/new --provider-id openai --model-id gpt-4o Session B"
         if n == 2:

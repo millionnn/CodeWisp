@@ -205,13 +205,9 @@ def test_cli_session_commands_new_use_list_history(tmp_path: Path) -> None:
         if n == 0:
             return "task-a"
         if n == 1:
-            for line in outputs:
-                if "Session" in line and "ses_" in line:
-                    # "  Session   : ses_xxx (title)"
-                    for token in line.split():
-                        if token.startswith("ses_"):
-                            sid_holder["a"] = token
-                            break
+            for s in agents.sessions.list_sessions():
+                if s.title == "Session A":
+                    sid_holder["a"] = s.session_id
                     break
             return "/new other"
         if n == 2:
@@ -287,14 +283,9 @@ def test_cli_delete_current_session_creates_replacement(tmp_path: Path) -> None:
 
     def input_fn(_prompt: str) -> str | None:
         if "sid" not in sid_holder:
-            for line in outputs:
-                if "Session" in line and "ses_" in line:
-                    for token in line.split():
-                        if token.startswith("ses_"):
-                            sid_holder["sid"] = token
-                            break
-                    if "sid" in sid_holder:
-                        break
+            sessions = agents.sessions.list_sessions()
+            assert sessions, "expected startup session"
+            sid_holder["sid"] = sessions[0].session_id
             return "hello"
         if "deleted" not in sid_holder:
             sid_holder["deleted"] = "1"
@@ -339,7 +330,8 @@ def test_cli_resume_existing_session(tmp_path: Path) -> None:
         show_tool_trace=False,
     )
     assert code == 0
-    assert any("Session:" in line or "Session   :" in line for line in outputs)
+    assert any("/help" in line for line in outputs)
+    assert any("hello" in line for line in outputs)  # /history 可见先前对话
     assert any("second" in line for line in outputs)
     # continue saw prior user message
     assert any(

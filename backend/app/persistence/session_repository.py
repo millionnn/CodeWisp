@@ -1,5 +1,5 @@
 """SessionRepository：Session CRUD。"""
-
+#对于session的增删改查操作
 from __future__ import annotations
 
 import sqlite3
@@ -14,6 +14,7 @@ class SessionRepository:
     def __init__(self, store: SqliteStore) -> None:
         self._store = store
 
+#创建一个session
     def create(self, session: Session) -> Session:
         now = utc_now_iso()
         created = session
@@ -54,6 +55,7 @@ class SessionRepository:
             raise RepositoryError(f"创建 Session 失败: {exc}") from exc
         return created
 
+#获取一个session
     def get(self, session_id: str) -> Session:
         row = self._store.execute(
             "SELECT * FROM sessions WHERE id = ?",
@@ -63,6 +65,7 @@ class SessionRepository:
             raise NotFoundError(f"Session 不存在: {session_id}")
         return _row_to_session(row)
 
+#获取多个session
     def list(self, *, limit: int = 100, offset: int = 0) -> list[Session]:
         if limit < 1:
             raise ValueError("limit 必须 >= 1")
@@ -78,6 +81,7 @@ class SessionRepository:
         ).fetchall()
         return [_row_to_session(row) for row in rows]
 
+#更新一个session
     def update(
         self,
         session_id: str,
@@ -122,9 +126,11 @@ class SessionRepository:
             raise RepositoryError(f"更新 Session 失败: {exc}") from exc
         return updated
 
+#重命名一个session
     def rename(self, session_id: str, title: str) -> Session:
         return self.update(session_id, title=title)
 
+#删除一个session
     def delete(self, session_id: str) -> None:
         self.get(session_id)  # ensure exists
         try:
@@ -133,7 +139,7 @@ class SessionRepository:
         except sqlite3.Error as exc:
             raise RepositoryError(f"删除 Session 失败: {exc}") from exc
 
-
+#将数据库行转换为session对象
 def _row_to_session(row: sqlite3.Row) -> Session:
     return Session(
         session_id=row["id"],

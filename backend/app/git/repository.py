@@ -1,5 +1,6 @@
 """GitRepository — lowest-level Git CLI boundary (shell=False only)."""
 
+#
 from __future__ import annotations
 
 import re

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from backend.app.providers.errors import InvalidProviderError
 
-
+#厂商对象（谁提供服务）
 @dataclass(frozen=True)
 class Provider:
     """逻辑 Provider 身份（如 deepseek / openai）。

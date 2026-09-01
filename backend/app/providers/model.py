@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from backend.app.providers.errors import InvalidModelError
 
-
+#模型（供应商 id + 模型 id 唯一确定）
 @dataclass(frozen=True)
 class Model:
     """逻辑 Model 身份与能力声明。
@@ -17,9 +17,9 @@ class Model:
     provider_id: str
     model_id: str
     display_name: str
-    context_window: int | None = None
-    supports_tool_call: bool = True
-    supports_streaming: bool = False
+    context_window: int | None = None#上下文窗口
+    supports_tool_call: bool = True#支持工具调用
+    supports_streaming: bool = False#支持流式
 
     def __post_init__(self) -> None:
         pid = (self.provider_id or "").strip()

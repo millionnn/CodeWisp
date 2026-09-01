@@ -144,7 +144,7 @@ class CliEventSink:
         if not self._answer_header_shown:
             self._stream_write_fn("\n")
             if self._interactive and get_theme().color:
-                self._stream_write_fn(f"\033[1;36m{_ANSWER_HEADER}\033[0m")
+                self._stream_write_fn(f"\033[1;38;5;80m{_ANSWER_HEADER}\033[0m")
             else:
                 self._stream_write_fn(_ANSWER_HEADER)
             self._stream_write_fn("\n")

@@ -1,5 +1,5 @@
 """Conversation / Agent Message REST 路由。"""
-
+#消息相关的api具体定义
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
@@ -15,7 +15,7 @@ from backend.app.session.service import SessionService
 
 router = APIRouter(prefix="/api/sessions", tags=["messages"])
 
-
+#获取一个session的所有消息：GET   /api/sessions/{session_id}/messages
 @router.get("/{session_id}/messages", response_model=list[MessageResponse])
 def list_messages(
     session_id: str,
@@ -24,7 +24,7 @@ def list_messages(
     conversation = sessions.load_conversation(session_id)
     return [message_to_response(m) for m in conversation.messages]
 
-
+#发送一条消息：POST   /api/sessions/{session_id}/messages
 @router.post("/{session_id}/messages", response_model=PostMessageResponse)
 def post_message(
     session_id: str,

@@ -228,8 +228,8 @@ def format_plan_strip(plan: Plan | None, *, max_title: int = 72) -> str:
 
 
 def plan_renderable(view: PlanView | Plan | None) -> Any:
-    from rich.text import Text
     from rich.console import Group
+    from rich.text import Text
 
     text = format_plan_panel(view, numbered=True, show_header=True)
     if not text or text == "No active plan.":
@@ -237,19 +237,51 @@ def plan_renderable(view: PlanView | Plan | None) -> Any:
     parts: list[Text] = []
     for line in text.split("\n"):
         if line.startswith("●"):
-            style = "cw.warn"
+            parts.append(Text(line, style="bold #fbbf24"))
         elif line.startswith("✓"):
-            style = "cw.ok"
+            parts.append(Text(line, style="bold #34d399"))
         elif line.startswith("✗"):
-            style = "cw.fail"
+            parts.append(Text(line, style="bold #f87171"))
         elif line.startswith("Plan"):
-            style = "cw.agent"
+            parts.append(Text(line, style="bold #2dd4bf"))
         elif line.startswith("     "):
-            style = "cw.dim"
+            parts.append(_tool_activity_rich(line))
+        elif line.startswith("○") or line.startswith("⊘"):
+            parts.append(Text(line, style="dim #94a3b8"))
         else:
-            style = "cw.dim"
-        parts.append(Text(line, style=style))
+            parts.append(Text(line, style="dim #94a3b8"))
     return Group(*parts)
+
+
+def _tool_activity_rich(line: str) -> Any:
+    """步骤下工具行分色：◇/✓/✗ · 工具名 · 详情。"""
+    from rich.text import Text
+
+    stripped = line.lstrip(" ")
+    indent = line[: len(line) - len(stripped)]
+    if not stripped or stripped.strip() in {"", "…"}:
+        return Text(line, style="dim #64748b")
+
+    parts = stripped.split(None, 2)
+    glyph = parts[0]
+    name = parts[1] if len(parts) > 1 else ""
+    detail = parts[2] if len(parts) > 2 else ""
+
+    glyph_style = {
+        "✓": "bold #34d399",
+        "✗": "bold #f87171",
+        "◇": "bold #2dd4bf",
+    }.get(glyph, "dim #64748b")
+
+    t = Text(indent)
+    t.append(glyph, style=glyph_style)
+    if name:
+        t.append(" ")
+        t.append(name, style="bold #7dd3fc")
+    if detail:
+        t.append(" ")
+        t.append(detail, style="dim #94a3b8")
+    return t
 
 
 def render_plan_strip(

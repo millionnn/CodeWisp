@@ -23,6 +23,7 @@ class ToolResult:
         """序列化，供测试、CLI 调试、Observation 持久化与未来 Trace UI 使用。"""
         return asdict(self)
 
+    #将持久化数据反序列化，用于持久化 round-trip
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ToolResult:
         """自 dict 还原；与 ``to_dict`` round-trip。"""

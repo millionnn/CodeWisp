@@ -1,5 +1,6 @@
 """AgentEventSink：运行时事件投递抽象（CLI / 未来 SSE）。"""
 
+#通用事件出口，loop往外扔进度，不关心以后时cli还是web
 from __future__ import annotations
 
 from typing import Protocol

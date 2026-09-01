@@ -24,6 +24,7 @@ class ToolCall:
     # arguments JSON 解析失败时的错误说明；非空则 Agent 不应调用 Executor
     parse_error: str | None = None
 
+#给llm调用分配一个稳定的id
     def with_stable_id(self) -> ToolCall:
         """若 id 为空则分配 ``tc_<uuid>``；已有非空 id 则原样返回。"""
         if (self.id or "").strip():
@@ -36,6 +37,7 @@ class ToolCall:
             parse_error=self.parse_error,
         )
 
+#将工具调用序列化，用于持久化
     def to_persistence_dict(self) -> dict[str, Any]:
         """完整领域序列化（含 arguments_raw / parse_error），供持久化 round-trip。"""
         return {
@@ -46,6 +48,7 @@ class ToolCall:
             "parse_error": self.parse_error,
         }
 
+    #将持久化数据反序列化，用于持久化 round-trip
     @classmethod
     def from_persistence_dict(cls, data: dict[str, Any]) -> ToolCall:
         if not isinstance(data, dict):
@@ -76,6 +79,7 @@ class ToolCall:
         ).with_stable_id()
 
 
+#一次LLM调用的结构化结果
 @dataclass(frozen=True)
 class LLMResponse:
     """一次 LLM 调用的结构化结果。"""
