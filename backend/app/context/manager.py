@@ -97,6 +97,7 @@ class AssembledParts:
     retrieved: str = ""
     git_context: str = ""
     lsp_context: str = ""
+    mcp_context: str = ""
     workspace: str = ""
     checkpoint: str = ""
     recent: list[Message] = field(default_factory=list)
@@ -125,6 +126,7 @@ class DefaultContextManager:
         event_emitter: Any | None = None,
         git_context_provider: Any | None = None,
         lsp_context_provider: Any | None = None,
+        mcp_context_provider: Any | None = None,
     ) -> None:
         self.session_id = session_id
         self.workspace_root = workspace_root
@@ -139,6 +141,7 @@ class DefaultContextManager:
         self._event_emitter = event_emitter
         self._git_context_provider = git_context_provider
         self._lsp_context_provider = lsp_context_provider
+        self._mcp_context_provider = mcp_context_provider
 
         self.project_rules = ProjectInstructionSet()
         self.task: TaskState | None = None
@@ -202,6 +205,7 @@ class DefaultContextManager:
         self.refresh_retrieval(goal)
         self.refresh_git_context()
         self.refresh_lsp_context()
+        self.refresh_mcp_context()
 
         need_plan = self.plan is None or self.plan.status in {
             PlanStatus.COMPLETED,
@@ -245,6 +249,14 @@ class DefaultContextManager:
             if focus_path and hasattr(self._lsp_context_provider, "set_focus_path"):
                 self._lsp_context_provider.set_focus_path(focus_path)
             self._lsp_context_provider.refresh()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def refresh_mcp_context(self) -> None:
+        if self._mcp_context_provider is None:
+            return
+        try:
+            self._mcp_context_provider.refresh()
         except Exception:  # noqa: BLE001
             pass
 
@@ -497,6 +509,9 @@ class DefaultContextManager:
             elif isinstance(args.get("path"), str):
                 focus = args["path"]
             self.refresh_lsp_context(focus_path=focus)
+        elif name.startswith("mcp."):
+            # MCP results stay in Observation; only refresh capability metadata
+            self.refresh_mcp_context()
 
         if self.task:
             self.task.workspace_state = ws
@@ -504,15 +519,41 @@ class DefaultContextManager:
             self._save_task()
 
         try:
-            for item in candidates_to_items(
-                self.session_id,
-                self._extractor.extract_from_tool(
-                    observation,
-                    source_id=tool_call_id,
-                    file_path=paths[0] if paths else None,
-                ),
-            ):
-                self._add_memory(item)
+            # MCP: only extract short, high-signal snippets (avoid Memory pollution)
+            if name.startswith("mcp."):
+                if result.success and observation and len(observation) < 1500:
+                    from dataclasses import replace
+
+                    from backend.app.context.models import MemorySourceType
+
+                    cands = self._extractor.extract_from_tool(
+                        observation,
+                        source_id=tool_call_id,
+                        file_path=None,
+                    )[:1]
+                    remapped = [
+                        replace(
+                            c,
+                            source_type=MemorySourceType.MCP,
+                            source_id=(
+                                (result.metadata or {}).get("mcp_request_id")
+                                or c.source_id
+                            ),
+                        )
+                        for c in cands
+                    ]
+                    for item in candidates_to_items(self.session_id, remapped):
+                        self._add_memory(item)
+            else:
+                for item in candidates_to_items(
+                    self.session_id,
+                    self._extractor.extract_from_tool(
+                        observation,
+                        source_id=tool_call_id,
+                        file_path=paths[0] if paths else None,
+                    ),
+                ):
+                    self._add_memory(item)
         except Exception:  # noqa: BLE001
             pass
 
@@ -583,6 +624,7 @@ class DefaultContextManager:
             self.refresh_project_rules(focus_path=paths[0] if paths else None)
         self.refresh_git_context()
         self.refresh_lsp_context()
+        self.refresh_mcp_context()
 
     def status(self, conversation: Conversation | None = None) -> ContextStatus:
         self.ensure_loaded()
@@ -634,6 +676,11 @@ class DefaultContextManager:
                 self._lsp_context_provider.cached
                 or self._lsp_context_provider.build_workspace_context()
             )
+        if self._mcp_context_provider is not None:
+            parts.mcp_context = (
+                self._mcp_context_provider.cached
+                or self._mcp_context_provider.build_workspace_context()
+            )
         if self.latest_checkpoint:
             parts.checkpoint = self.latest_checkpoint.render()
         if self.retrieved:
@@ -660,6 +707,7 @@ class DefaultContextManager:
             ("Retrieved Context", parts.retrieved, ContextPriority.P2),
             ("Git Context", parts.git_context, ContextPriority.P2),
             ("LSP Context", parts.lsp_context, ContextPriority.P2),
+            ("MCP Context", parts.mcp_context, ContextPriority.P2),
             ("Workspace State", parts.workspace, ContextPriority.P2),
             ("Checkpoint", parts.checkpoint, ContextPriority.P2),
         ]
@@ -751,6 +799,7 @@ class DefaultContextManager:
             parts.retrieved,
             parts.git_context,
             parts.lsp_context,
+            parts.mcp_context,
             parts.workspace,
             parts.checkpoint,
         ]

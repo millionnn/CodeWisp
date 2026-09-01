@@ -207,6 +207,35 @@ ContextManager ← LSPContextProvider (metadata-first)
 | `backend/app/tools/builtin/lsp/` | Agent LSP Tools |
 | `backend/app/api/routes/lsp.py` | REST 边界 |
 
+### V1.3：MCP Tool Integration & Extensible Agent Runtime
+
+```text
+AgentLoop
+    ↓
+ToolRegistry  ←── MCPToolAdapter (mcp.<server>.<tool>)
+    ↓                 ↓
+Built-in / Git / LSP  MCPClient (stdio)
+                          ↓
+                     MCP Servers (allowlist from config)
+```
+
+核心能力：
+
+- **文件系统配置**：`~/.codewisp/config.json` / `workspace/.codewisp/mcp.json`（secret 不进 SQLite）
+- **动态发现**：initialize → tools/list → Adapter → ToolRegistry
+- **统一 Permission**：read ALLOW / write ASK / dangerous DENY；走现有 PermissionHandler
+- **Context metadata-first**：`MCPContextProvider` 只注入 server/tool 清单
+- **Graceful degradation**：MCP 不可用时 Agent 继续使用内置 / Git / LSP
+- **Demo Server**：`codewisp-demo-mcp`（`search_project_docs` / `get_project_info`）
+
+| 模块 | 职责 |
+|------|------|
+| `backend/app/mcp/` | MCP 领域（config / client / manager / adapter / policy / service） |
+| `backend/app/api/routes/mcp.py` | REST 边界 |
+| CLI `/mcp` | servers / tools / connect / disconnect / reload |
+
+AgentLoop **无** MCP 特判；MCP 不是第二套 Runtime。
+
 ## 终止条件
 
 | 状态 | 含义 |
@@ -231,7 +260,7 @@ AgentService
      SemanticIndex (SQLite metadata + local vectors)
 ```
 
-Context 优先级（摘要）：System → Rules → Task/Plan → Memory → Retrieved Code → **Git Context** → **LSP Context** → Workspace → Recent → Tool Output。
+Context 优先级（摘要）：System → Rules → Task/Plan → Memory → Retrieved Code → **Git Context** → **LSP Context** → **MCP Context** → Workspace → Recent → Tool Output。
 
 ## 配置项
 
@@ -245,3 +274,5 @@ Context 优先级（摘要）：System → Rules → Task/Plan → Memory → Re
 | `--max-steps` | 迭代预算 | 40 |
 | `--session` | 续跑 Session ID | 新建 |
 | `--provider-id` / `--model-id` | Session 模型身份（仅记录） | deepseek / LLM_MODEL |
+| `workspace/.codewisp/mcp.json` | MCP Server 配置（优先） | — |
+| `~/.codewisp/config.json` | 用户级 MCP（`mcpServers`） | — |

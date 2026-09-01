@@ -78,8 +78,38 @@ codewisp -w /other/project          # 显式指定 Workspace（覆盖 cwd）
 codewisp --db ~/.codewisp/demo.db   # 可选：指定 SQLite 路径
 ```
 
-CLI 命令：`/help` `/sessions` `/session` `/new` `/use` `/history` `/providers` `/models` `/model` `/status` `/delete` `/exit`。
+CLI 命令：`/help` `/sessions` `/session` `/new` `/use` `/history` `/providers` `/models` `/model` `/status` `/git` `/lsp` `/mcp` `/delete` `/exit`。
 普通输入经 **AgentService → ModelResolver → AgentLoop** 执行并持久化；工具轨迹实时展示；最终回答 **流式纯文本 + 结束后 Markdown 重绘**（Rich）；ASK 经 **CliPermissionHandler**。
+
+### MCP（V1.3）
+
+在目标仓库放置 `.codewisp/mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "demo": {
+      "command": "python3",
+      "args": ["-m", "backend.app.mcp.demo_server"],
+      "enabled": true
+    }
+  }
+}
+```
+
+然后：
+
+```bash
+codewisp
+/mcp reload
+/mcp tools
+```
+
+Agent 会把 MCP 工具注册为 `mcp.<server>.<tool>`（与内置工具一样走 Permission / Trace）。离线 Demo：
+
+```bash
+codewisp-demo-mcp
+```
 
 可选环境变量：`NO_COLOR=1` 关闭颜色；`CODEWISP_THEME=mono` 强制纯文本。
 
@@ -139,11 +169,14 @@ CodeWisp 是从零实现的编程智能体（Coding Agent）：面向自然语�
 - **Hierarchical Context：** Task / Plan / Memory / Checkpoint / Budget / Compaction（`/context` `/plan`）
 - **Semantic Memory：** 本地 embedding 索引 + hybrid 检索（`/memory search|index|rebuild|stats`）
 - **LLM Planner（旁路）：** `/plan refresh`；Loop 内启发式 replan，不改 Workspace
+- **Git-Aware Workflow：** `/git` + `git_*` tools（与 Snapshot 正交）
+- **LSP Code Intelligence：** `/lsp` + `lsp_*` tools（Pyright；不可用则降级）
+- **MCP Tool Extension：** `/mcp` + `mcp.<server>.<tool>`（stdio；动态发现；统一 Permission）
 - **Backend API + CLI** 共用 `AgentService`
 
 ### 当前不支持
 
-完整 Web UI、MCP、LSP、Multi-Agent、外部云端 Vector DB、复杂 Reranker。
+完整 Web UI、MCP Resource/Prompt/OAuth 全功能、Multi-Agent、外部云端 Vector DB、复杂 Reranker。
 
 可选：单独验证工具系统（无需 API Key）：
 

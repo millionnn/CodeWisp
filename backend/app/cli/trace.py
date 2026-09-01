@@ -94,6 +94,40 @@ def _out(output_fn: Callable[[str], None], text: str, sty: str | None = None) ->
         output_fn(text)
 
 
+def _print_tool_glyph(glyph: str, name: str, *, kind: str, leading_nl: bool = False) -> None:
+    """TTY Rich：工具主行分色。"""
+    from rich.text import Text
+
+    from backend.app.cli.theme import make_console
+
+    styles = {
+        "call": ("bold #2dd4bf", "bold #7dd3fc"),
+        "ok": ("bold #34d399", "bold #6ee7b7"),
+        "fail": ("bold #f87171", "bold #fca5a5"),
+    }
+    g_sty, n_sty = styles.get(kind, styles["call"])
+    t = Text()
+    if leading_nl:
+        t.append("\n")
+    t.append(f"  {glyph} ", style=g_sty)
+    t.append(name, style=n_sty)
+    make_console().print(t)
+
+
+def _tool_display_name(event: AgentEvent) -> str:
+    name = event.tool_name or "tool"
+    meta = event.metadata or {}
+    nested = meta.get("metadata") if isinstance(meta.get("metadata"), dict) else {}
+    display = meta.get("display") or (nested.get("display") if nested else None)
+    if isinstance(display, str) and display.strip():
+        return display.strip()
+    if name.startswith("mcp."):
+        parts = name.split(".")
+        if len(parts) >= 3:
+            return f"MCP · {parts[1]}.{'.'.join(parts[2:])}"
+    return name
+
+
 def render_live_event(
     event: AgentEvent,
     *,
@@ -117,24 +151,33 @@ def render_live_event(
             _out(output_fn, "\n  ── Self-Correction ──", "cw.warn")
             _out(output_fn, "  ┊  Observed a failure; continuing.", "cw.dim")
             pending_fail = False
-        name = event.tool_name or "tool"
-        _out(output_fn, f"\n  ◇ {name}", "cw.info")
+        name = _tool_display_name(event)
+        if output_fn is print and not _plain(output_fn):
+            _print_tool_glyph("◇", name, kind="call", leading_nl=True)
+        else:
+            _out(output_fn, f"\n  ◇ {name}", "cw.info")
         args = (event.metadata or {}).get("arguments") or {}
         if isinstance(args, dict):
             for line in _format_tool_args(args):
                 _out(output_fn, line, "cw.dim")
 
     elif event.event_type == "tool_completed":
-        name = event.tool_name or "tool"
+        name = _tool_display_name(event)
         summary = _summarize_result(event.metadata or {})
-        _out(output_fn, f"  ✓ {name}", "cw.ok")
+        if output_fn is print and not _plain(output_fn):
+            _print_tool_glyph("✓", name, kind="ok")
+        else:
+            _out(output_fn, f"  ✓ {name}", "cw.ok")
         if summary:
             _out(output_fn, f"     {summary}", "cw.dim")
 
     elif event.event_type == "tool_failed":
-        name = event.tool_name or "tool"
+        name = _tool_display_name(event)
         summary = _summarize_result(event.metadata or {})
-        _out(output_fn, f"  ✗ {name}", "cw.fail")
+        if output_fn is print and not _plain(output_fn):
+            _print_tool_glyph("✗", name, kind="fail")
+        else:
+            _out(output_fn, f"  ✗ {name}", "cw.fail")
         if summary:
             _out(output_fn, f"     {summary}", "cw.dim")
         pending_fail = True

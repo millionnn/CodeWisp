@@ -54,55 +54,19 @@ DELETE_COMMANDS = frozenset({"/delete", "/rm"})
 
 def print_banner(
     *,
-    workspace_root: Path | None = None,
-    session: Session | None = None,
+    workspace_root: Path | None = None,  # noqa: ARG001 — 保留签名兼容
+    session: Session | None = None,  # noqa: ARG001 — 保留签名兼容
     output_fn: Callable[[str], None] = print,
 ) -> None:
+    """启动 Banner：仅品牌 ASCII + 版本；Session/Model/命令见 footer 与 /help。"""
     print_app_banner(output_fn=output_fn)
-    theme = get_theme()
-    rows: list[tuple[str, str]] = []
-    if workspace_root is not None:
-        rows.append(("Workspace", str(workspace_root)))
-    if session is not None:
-        rows.append(("Session", f"{session.session_id} ({session.title})"))
-        rows.append(("Model", f"{session.provider_id}/{session.model_id}"))
-    cmds = (
-        "/help /use /model /plan /context /memory\n"
-        "  /git /lsp /diff /revert /status /exit"
-    )
-    if output_fn is print and theme.rich_enabled:
-        from rich.panel import Panel
-        from rich.table import Table
-        from rich.text import Text
-
-        table = Table(show_header=False, box=None, padding=(0, 1))
-        table.add_column("k", style="cw.key", width=10)
-        table.add_column("v", style="cw.value")
-        for k, v in rows:
-            table.add_row(k, v)
-        table.add_row("Commands", cmds)
-        tip = Text("\n↑↓ Enter 选择 · 输入任务继续当前 Session", style="cw.dim")
-        from rich.console import Group
-
+    if output_fn is print and get_theme().rich_enabled:
         make_console().print(
-            Panel(
-                Group(table, tip),
-                title="[cw.brand]Session[/]",
-                title_align="left",
-                border_style="dim",
-                padding=(0, 1),
-            )
+            "[cw.dim]  输入任务开始 · [/][cw.info]/help[/][cw.dim] 查看命令[/]"
         )
         make_console().print()
         return
-
-    for k, v in rows:
-        output_fn(f"  {k:<10}: {v}")
-    output_fn("")
-    output_fn("  Commands  : /help  /sessions  /session  /new  /use  /history")
-    output_fn("              /providers  /models  /model  /git  /lsp  /diff  /revert")
-    output_fn("              /context  /plan  /memory  /status  /delete  /exit")
-    output_fn("  Type a task to continue the current Session.\n")
+    output_fn("  输入任务开始 · /help 查看命令\n")
 
 
 def read_user_input(
@@ -251,6 +215,14 @@ def run_cli(
     status_bar = StatusBarState()
     status_bar.update_workspace(workspace_root)
     status_bar.update_from_session(current)
+    try:
+        _ctx0 = agents.get_context_status(current.session_id)
+        status_bar.update_context(
+            used=_ctx0.total_tokens,
+            budget=int(_ctx0.budget.get("usable_budget") or 0) or None,
+        )
+    except Exception:  # noqa: BLE001
+        status_bar.update_context(used=0, budget=None)
 
     def _plan_provider():
         try:
@@ -266,14 +238,26 @@ def run_cli(
         show_tool_trace=show_tool_trace,
     )
 
-    def _prompt_toolbar() -> str:
-        # OpenCode 风格 footer：左 workspace，右 title/model/tokens
+    def _refresh_context_footer() -> None:
+        try:
+            ctx = agents.get_context_status(current.session_id)
+            status_bar.update_context(
+                used=ctx.total_tokens,
+                budget=int(ctx.budget.get("usable_budget") or 0) or None,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _prompt_toolbar() -> object:
+        # OpenCode 风格 footer：左 workspace，右 title/model/完整 token
+        _refresh_context_footer()
         return status_bar.toolbar_text()
 
     while True:
         # 非 TTY / 测试：在提示前打印一行 footer；TTY 用 bottom_toolbar（不占对话区）
         use_toolbar = input_fn is read_user_input
         if not use_toolbar:
+            _refresh_context_footer()
             status_bar.print_line(output_fn)
             user_text = input_fn("> ")
         else:
@@ -349,6 +333,10 @@ def run_cli(
 
         if lower == "/lsp" or lower.startswith("/lsp "):
             _cmd_lsp(agents, current, user_text, output_fn=output_fn)
+            continue
+
+        if lower == "/mcp" or lower.startswith("/mcp "):
+            _cmd_mcp(agents, current, user_text, output_fn=output_fn)
             continue
 
         if lower == "/diff" or lower.startswith("/diff "):
@@ -636,7 +624,7 @@ def _cmd_history(
     for msg in visible:
         if msg.role == "user":
             if use_rich:
-                make_console().print(f"\n[cw.user]你[/]")
+                make_console().print(f"\n[cw.user]❯ 你[/]")
                 make_console().print(msg.content or "", style="cw.dim")
             else:
                 output_fn("\n[你]")
@@ -1228,6 +1216,62 @@ def _cmd_lsp(
         output_fn(f"LSP: {exc}")
     except (ValueError, TypeError) as exc:
         output_fn(f"参数错误: {exc}")
+    except (SessionError, CodeWispError) as exc:
+        output_fn(f"错误: {exc}")
+
+
+def _cmd_mcp(
+    agents: AgentService,
+    current: Session,
+    user_text: str,
+    *,
+    output_fn: Callable[[str], None],
+) -> None:
+    """``/mcp`` [status|servers|tools|connect|disconnect|reload]"""
+    from backend.app.mcp.errors import MCPError
+
+    parts = user_text.split()
+    sub = parts[1].lower() if len(parts) > 1 else "servers"
+    try:
+        svc = agents._mcp_service_for_session(current.session_id)
+        if not svc.list_servers():
+            try:
+                svc.manager.reload_config()
+            except MCPError:
+                pass
+
+        if sub in {"", "status", "servers"}:
+            output_fn(svc.render_servers())
+            return
+        if sub == "tools":
+            output_fn(svc.render_tools())
+            return
+        if sub == "connect":
+            if len(parts) < 3:
+                output_fn("用法: /mcp connect <server>")
+                return
+            rt = agents.mcp_connect(current.session_id, parts[2])
+            output_fn(rt.render_line())
+            return
+        if sub == "disconnect":
+            if len(parts) < 3:
+                output_fn("用法: /mcp disconnect <server>")
+                return
+            rt = agents.mcp_disconnect(current.session_id, parts[2])
+            output_fn(rt.render_line())
+            return
+        if sub == "reload":
+            results = agents.mcp_reload(current.session_id)
+            output_fn("MCP reloaded\n")
+            for rt in results:
+                output_fn(rt.render_line())
+                output_fn("")
+            return
+        output_fn(
+            "用法: /mcp [status|servers|tools|connect <server>|disconnect <server>|reload]"
+        )
+    except MCPError as exc:
+        output_fn(f"MCP: {exc}")
     except (SessionError, CodeWispError) as exc:
         output_fn(f"错误: {exc}")
 

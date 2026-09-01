@@ -64,8 +64,19 @@ def test_empty_name_on_get_and_register() -> None:
         registry.register(_DummyTool("  "))
 
 
+def test_unregister_and_replace() -> None:
+    registry = ToolRegistry()
+    registry.register(_DummyTool("alpha"))
+    registry.register_or_replace(_DummyTool("alpha"))
+    assert registry.contains("alpha")
+    assert registry.unregister("alpha") is True
+    assert registry.unregister("alpha") is False
+    assert not registry.contains("alpha")
+
+
 def test_list_schemas() -> None:
     registry = ToolRegistry()
     registry.register(_DummyTool("alpha"))
     schemas = registry.list_schemas()
     assert schemas[0]["function"]["name"] == "alpha"
+

@@ -45,6 +45,11 @@ from backend.app.lsp.models import (
     Symbol,
 )
 from backend.app.lsp.service import LSPService
+from backend.app.mcp.context import MCPContextProvider
+from backend.app.mcp.manager import MCPManager, get_manager_for_workspace
+from backend.app.mcp.models import MCPCallResult, MCPServerRuntime, MCPToolInfo
+from backend.app.mcp.registry import sync_mcp_tools_to_registry
+from backend.app.mcp.service import MCPService
 from backend.app.context.models import (
     CheckpointTrigger,
     ContextCheckpoint,
@@ -145,6 +150,77 @@ class AgentService:
         # 进程内缓存：供 CLI /context 诊断（重启后可从 SQLite 重建）
         self._context_managers: dict[str, DefaultContextManager] = {}
         self._lsp_manager: LanguageServerManager = get_default_manager()
+        # MCP managers are workspace-scoped (session isolation via workspace root)
+        self._mcp_managers: dict[str, MCPManager] = {}
+
+    def _mcp_manager_for_workspace(self, workspace: str) -> MCPManager:
+        key = str(workspace)
+        mgr = self._mcp_managers.get(key)
+        if mgr is None:
+            mgr = get_manager_for_workspace(workspace)
+            self._mcp_managers[key] = mgr
+        return mgr
+
+    def _mcp_service_for_session(self, session_id: str) -> MCPService:
+        session = self.sessions.get_session(session_id)
+        return MCPService(
+            Workspace(session.workspace),
+            manager=self._mcp_manager_for_workspace(session.workspace),
+        )
+
+    def mcp_list_servers(self, session_id: str) -> list[MCPServerRuntime]:
+        return self._mcp_service_for_session(session_id).list_servers()
+
+    def mcp_get_server(self, session_id: str, server_id: str) -> MCPServerRuntime:
+        return self._mcp_service_for_session(session_id).get_server(server_id)
+
+    def mcp_list_tools(
+        self, session_id: str, *, server_id: str | None = None
+    ) -> list[MCPToolInfo]:
+        return self._mcp_service_for_session(session_id).list_tools(server_id)
+
+    def mcp_connect(self, session_id: str, server_id: str) -> MCPServerRuntime:
+        svc = self._mcp_service_for_session(session_id)
+        runtime = svc.connect(server_id)
+        cm = self._context_managers.get(session_id)
+        if cm is not None:
+            cm.refresh_mcp_context()
+        return runtime
+
+    def mcp_disconnect(self, session_id: str, server_id: str) -> MCPServerRuntime:
+        svc = self._mcp_service_for_session(session_id)
+        runtime = svc.disconnect(server_id)
+        cm = self._context_managers.get(session_id)
+        if cm is not None:
+            cm.refresh_mcp_context()
+        return runtime
+
+    def mcp_reload(self, session_id: str) -> list[MCPServerRuntime]:
+        svc = self._mcp_service_for_session(session_id)
+        results = svc.reload()
+        cm = self._context_managers.get(session_id)
+        if cm is not None:
+            cm.refresh_mcp_context()
+        return results
+
+    def mcp_call_tool(
+        self,
+        session_id: str,
+        server_id: str,
+        tool_name: str,
+        arguments: dict | None = None,
+        *,
+        confirm: bool = False,
+        permission_handler: PermissionHandler | None = None,
+    ) -> MCPCallResult:
+        return self._mcp_service_for_session(session_id).call_tool(
+            server_id,
+            tool_name,
+            arguments,
+            permission_handler=permission_handler or self._permission_handler,
+            session_id=session_id,
+            confirm=confirm,
+        )
 
     def resume(self, session_id: str) -> SessionResumeState:
         """恢复 Session 历史（不跑 Agent）。等价于 ``sessions.resume_session``。"""
@@ -620,6 +696,10 @@ class AgentService:
             lsp_context_provider=LSPContextProvider(
                 session.workspace, manager=self._lsp_manager
             ),
+            mcp_context_provider=MCPContextProvider(
+                session.workspace,
+                manager=self._mcp_manager_for_workspace(session.workspace),
+            ),
         )
         cm.load()
         self._context_managers[session.session_id] = cm
@@ -814,6 +894,24 @@ class AgentService:
             lsp_service=LSPService(workspace, manager=self._lsp_manager),
             plan_complete_fn=context_manager.complete_current_step,
         )
+        # MCP tools: discover & register as ordinary Tools (no AgentLoop special-case)
+        try:
+            mcp_mgr = self._mcp_manager_for_workspace(session.workspace)
+            if not mcp_mgr.list_servers():
+                mcp_mgr.reload_config()
+            sync_mcp_tools_to_registry(
+                registry,
+                mcp_mgr,
+                permission_handler=handler,
+                session_id=session.session_id,
+                agent_run_id=run.agent_run_id,
+                on_permission_wait=on_permission_wait if handler else None,
+                on_permission_resolved=on_permission_resolved if handler else None,
+                connect_enabled=True,
+            )
+            context_manager.refresh_mcp_context()
+        except Exception:  # noqa: BLE001 — MCP failure must not block Agent
+            pass
         executor = ToolExecutor(registry)
         loop = AgentLoop(
             llm,

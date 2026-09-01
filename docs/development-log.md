@@ -1,5 +1,36 @@
 # 开发日志
 
+## V1.3 MCP Tool Integration
+
+**日期：** 2026-09-01
+
+### 目标
+
+让 CodeWisp 通过 MCP 动态发现、注册并调用外部工具，同时保持 AgentLoop / Permission / Context / Git / LSP / Snapshot 架构不被破坏。
+
+### 已完成
+
+- `backend/app/mcp/`：models / errors / config / transport / client / manager / adapter / policy / registry / context / service / demo_server
+- ToolRegistry：`unregister` / `register_or_replace`；MCP 工具 ID：`mcp.<server>.<tool>`
+- Permission：read ALLOW / write ASK / dangerous DENY；复用 PermissionHandler
+- Context：`MCPContextProvider`（metadata-first）
+- AgentService：run 前 sync MCP tools；失败不阻断 Agent
+- CLI：`/mcp servers|tools|connect|disconnect|reload`
+- API：`/api/sessions/{id}/mcp/*` 与 `/api/mcp/*`（需 `session_id`）
+- Demo：`codewisp-demo-mcp`（stdio，离线）
+- 测试：config/policy/client/adapter/agent/api；stdio demo roundtrip
+
+### 设计决策
+
+1. AgentLoop 无 `if mcp_` 特判；MCP 最终表现为普通 Tool
+2. 配置在文件系统，不在 SQLite 存 secret
+3. 自研最小 stdio JSON-RPC 客户端（与 LSP 风格一致）；不依赖 MCP SDK 版本抖动
+4. Resource / Prompt / OAuth / 全 transport → Future
+
+详见 [v1.3-mcp-report.md](./v1.3-mcp-report.md)
+
+---
+
 ## V1.2 LSP-Aware Coding Intelligence
 
 **日期：** 2026-09-01

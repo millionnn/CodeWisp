@@ -26,11 +26,27 @@ def compact_tool_activity(event: AgentEvent) -> str:
     """把一次工具调用压成一行，挂在当前 Plan 步骤下。"""
     name = event.tool_name or "tool"
     meta = event.metadata or {}
+    nested = meta.get("metadata") if isinstance(meta.get("metadata"), dict) else {}
+    display = str(meta.get("display") or (nested.get("display") if nested else "") or "")
+    if name.startswith("mcp.") and not display:
+        parts = name.split(".")
+        if len(parts) >= 3:
+            display = f"MCP · {parts[1]}.{'.'.join(parts[2:])}"
+        else:
+            display = f"MCP · {name}"
+    label = display or name
     args = meta.get("arguments") or {}
     if not isinstance(args, dict):
         args = {}
     detail = ""
-    if name in {"read_file", "edit_file", "write_file"}:
+    if name.startswith("mcp."):
+        for key in ("query", "q", "path", "uri", "name"):
+            if args.get(key):
+                detail = str(args[key])
+                break
+        if not detail and args:
+            detail = str(next(iter(args.values())))[:40]
+    elif name in {"read_file", "edit_file", "write_file"}:
         detail = str(args.get("path") or "")
     elif name == "search_code":
         detail = str(args.get("query") or args.get("pattern") or "")
@@ -55,21 +71,53 @@ def compact_tool_activity(event: AgentEvent) -> str:
         prefix = "✓"
     else:
         prefix = "◇"
-    return f"{prefix} {name} {detail}".rstrip()
+    return f"{prefix} {label} {detail}".rstrip()
 
 
 def _colorize_plan_line(line: str) -> str:
     if not get_theme().color:
         return line
+    # 青绿品牌色 + 琥珀进行中 + 翠绿完成 + 珊瑚失败（仅着色，不改文案）
     if line.startswith("●"):
-        return f"\033[1;33m{line}\033[0m"
+        return f"\033[1;38;5;214m{line}\033[0m"
     if line.startswith("✓"):
-        return f"\033[1;32m{line}\033[0m"
+        return f"\033[1;38;5;78m{line}\033[0m"
     if line.startswith("✗"):
-        return f"\033[1;31m{line}\033[0m"
+        return f"\033[1;38;5;203m{line}\033[0m"
     if line.startswith("Plan"):
-        return f"\033[1;36m{line}\033[0m"
-    return f"\033[2m{line}\033[0m"
+        return f"\033[1;38;5;80m{line}\033[0m"
+    if line.startswith("     "):
+        return _colorize_tool_activity_line(line)
+    return f"\033[2;38;5;245m{line}\033[0m"
+
+
+def _colorize_tool_activity_line(line: str) -> str:
+    """Plan 步骤下工具行：符号 / 工具名 / 详情分色。"""
+    stripped = line.lstrip(" ")
+    indent = line[: len(line) - len(stripped)]
+    if not stripped or stripped.strip() in {"", "…"}:
+        return f"\033[2;38;5;245m{line}\033[0m"
+
+    parts = stripped.split(None, 2)
+    glyph = parts[0]
+    name = parts[1] if len(parts) > 1 else ""
+    detail = parts[2] if len(parts) > 2 else ""
+
+    if glyph == "✓":
+        g = "\033[1;38;5;78m"  # green
+    elif glyph == "✗":
+        g = "\033[1;38;5;203m"  # red
+    elif glyph == "◇":
+        g = "\033[1;38;5;80m"  # teal
+    else:
+        g = "\033[2;38;5;245m"
+
+    out = f"{indent}{g}{glyph}\033[0m"
+    if name:
+        out += f" \033[1;38;5;117m{name}\033[0m"  # bright sky tool name
+    if detail:
+        out += f" \033[2;38;5;245m{detail}\033[0m"
+    return out
 
 
 class CliLiveRenderer:

@@ -1,74 +1,82 @@
 """CodeWisp 帮助文案。"""
 
 HELP_TEXT = """\
-[bold cyan]CodeWisp Commands[/]
+[bold #2dd4bf]✦ CodeWisp Commands[/]
 
-[bold]Session[/]
-  [cyan]/new[/] [title] [--provider-id P] [--model-id M]
+[bold #e2e8f0]Session[/]
+  [bold #67e8f9]/new[/] [title] [--provider-id P] [--model-id M]
                        Create a new session
-  [cyan]/new --model[/] <id>    Create session with model (unique id)
-  [cyan]/sessions[/]            List sessions
-  [cyan]/use[/]                 Interactive session picker (↑↓ Enter)
-  [cyan]/use[/] <id>            Switch session
-  [cyan]/session[/]             Show current session
-  [cyan]/history[/]             Show conversation history
-  [cyan]/delete[/]              Interactive delete picker (↑↓ Enter)
-  [cyan]/delete[/] <id>         Delete a session (/rm)
+  [bold #67e8f9]/new --model[/] <id>    Create session with model (unique id)
+  [bold #67e8f9]/sessions[/]            List sessions
+  [bold #67e8f9]/use[/]                 Interactive session picker (↑↓ Enter)
+  [bold #67e8f9]/use[/] <id>            Switch session
+  [bold #67e8f9]/session[/]             Show current session
+  [bold #67e8f9]/history[/]             Show conversation history
+  [bold #67e8f9]/delete[/]              Interactive delete picker (↑↓ Enter)
+  [bold #67e8f9]/delete[/] <id>         Delete a session (/rm)
 
-[bold]Model[/]
-  [cyan]/providers[/]           List available providers
-  [cyan]/models[/]              List available models
-  [cyan]/model[/]               Interactive model picker (↑↓ Enter)
-  [cyan]/model[/] <id>          Switch model (unique model_id)
-  [cyan]/model[/] <provider> <model>
+[bold #e2e8f0]Model[/]
+  [bold #67e8f9]/providers[/]           List available providers
+  [bold #67e8f9]/models[/]              List available models
+  [bold #67e8f9]/model[/]               Interactive model picker (↑↓ Enter)
+  [bold #67e8f9]/model[/] <id>          Switch model (unique model_id)
+  [bold #67e8f9]/model[/] <provider> <model>
                        Switch provider + model
 
-[bold]Changes[/]
-  [cyan]/git[/]                 Git repository status
-  [cyan]/git status[/]          Show branch and working tree
-  [cyan]/git diff[/] [path]     Show Git diff
-  [cyan]/git log[/] [limit]     Show recent commits
-  [cyan]/git branch[/]          List branches
-  [cyan]/git commit[/] <msg>    Commit (asks permission)
-  [cyan]/diff[/]                Diff latest run (Rich +/−)
-  [cyan]/diff[/] step <id>      Diff one AgentStep
-  [cyan]/diff[/] run <id>       Diff one AgentRun
-  [cyan]/revert[/]              Pick step/run then revert (asks permission)
-  [cyan]/revert[/] step <id>    Revert one AgentStep
-  [cyan]/revert[/] run <id>     Revert one AgentRun
+[bold #e2e8f0]Changes[/]
+  [bold #67e8f9]/git[/]                 Git repository status
+  [bold #67e8f9]/git status[/]          Show branch and working tree
+  [bold #67e8f9]/git diff[/] [path]     Show Git diff
+  [bold #67e8f9]/git log[/] [limit]     Show recent commits
+  [bold #67e8f9]/git branch[/]          List branches
+  [bold #67e8f9]/git commit[/] <msg>    Commit (asks permission)
+  [bold #67e8f9]/diff[/]                Diff latest run (Rich +/−)
+  [bold #67e8f9]/diff[/] step <id>      Diff one AgentStep
+  [bold #67e8f9]/diff[/] run <id>       Diff one AgentRun
+  [bold #67e8f9]/revert[/]              Pick step/run then revert (asks permission)
+  [bold #67e8f9]/revert[/] step <id>    Revert one AgentStep
+  [bold #67e8f9]/revert[/] run <id>     Revert one AgentRun
 
-[bold]Context[/]
-  [cyan]/context[/]             Hierarchical context budget breakdown
-  [cyan]/context status[/]      Same as /context
-  [cyan]/context compact[/]     Manual compaction + checkpoint
-  [cyan]/context memory[/]      List durable memories
-  [cyan]/plan[/]                Show current Plan (✓ ● ○ ✗)
-  [cyan]/plan show[/]           Same as /plan
-  [cyan]/plan refresh[/]        Rebuild plan via Planner
+[bold #e2e8f0]Context[/]
+  [bold #67e8f9]/context[/]             Hierarchical context budget breakdown
+  [bold #67e8f9]/context status[/]      Same as /context
+  [bold #67e8f9]/context compact[/]     Manual compaction + checkpoint
+  [bold #67e8f9]/context memory[/]      List durable memories
+  [bold #67e8f9]/plan[/]                Show current Plan (✓ ● ○ ✗)
+  [bold #67e8f9]/plan show[/]           Same as /plan
+  [bold #67e8f9]/plan refresh[/]        Rebuild plan via Planner
   [dim]During agent runs, Plan updates live from plan_* events; Tool Trace stays separate.[/]
 
-[bold]Code Intelligence[/]
-  [cyan]/lsp[/]                 LSP status
-  [cyan]/lsp status[/]          Language server availability
-  [cyan]/lsp diagnostics[/] [path]
+[bold #e2e8f0]Code Intelligence[/]
+  [bold #67e8f9]/lsp[/]                 LSP status
+  [bold #67e8f9]/lsp status[/]          Language server availability
+  [bold #67e8f9]/lsp diagnostics[/] [path]
                        Show diagnostics
-  [cyan]/lsp symbols[/] <path>  Document symbols
-  [cyan]/lsp definition[/] <path> <line> <char>
-  [cyan]/lsp references[/] <path> <line> <char>
+  [bold #67e8f9]/lsp symbols[/] <path>  Document symbols
+  [bold #67e8f9]/lsp definition[/] <path> <line> <char>
+  [bold #67e8f9]/lsp references[/] <path> <line> <char>
 
-[bold]Memory[/]
-  [cyan]/memory[/]              Memory help
-  [cyan]/memory search[/] <q>   Hybrid semantic + keyword search
-  [cyan]/memory index[/]        Index workspace (incremental)
-  [cyan]/memory rebuild[/]      Rebuild semantic index
-  [cyan]/memory stats[/]        Index statistics
+[bold #e2e8f0]MCP[/]
+  [bold #67e8f9]/mcp[/]                 MCP servers status
+  [bold #67e8f9]/mcp servers[/]         List configured MCP servers
+  [bold #67e8f9]/mcp tools[/]           List discovered MCP tools
+  [bold #67e8f9]/mcp connect[/] <id>    Connect a server
+  [bold #67e8f9]/mcp disconnect[/] <id> Disconnect a server
+  [bold #67e8f9]/mcp reload[/]          Reload config and reconnect
 
-[bold]Runtime[/]
-  [cyan]/status[/]              Show current runtime status
+[bold #e2e8f0]Memory[/]
+  [bold #67e8f9]/memory[/]              Memory help
+  [bold #67e8f9]/memory search[/] <q>   Hybrid semantic + keyword search
+  [bold #67e8f9]/memory index[/]        Index workspace (incremental)
+  [bold #67e8f9]/memory rebuild[/]      Rebuild semantic index
+  [bold #67e8f9]/memory stats[/]        Index statistics
 
-[bold]General[/]
-  [cyan]/help[/]                Show help
-  [cyan]/exit[/]                Exit CodeWisp
+[bold #e2e8f0]Runtime[/]
+  [bold #67e8f9]/status[/]              Show current runtime status
+
+[bold #e2e8f0]General[/]
+  [bold #67e8f9]/help[/]                Show help
+  [bold #67e8f9]/exit[/]                Exit CodeWisp
 
 [dim]Theme: CODEWISP_THEME=default|mono · NO_COLOR=1 disables color[/]
 [dim]Input: ↑↓←→ + Enter to select · Backspace works with CJK[/]
@@ -114,6 +122,14 @@ Context:
   /plan show           Same as /plan
   /plan refresh        Rebuild plan via Planner
   During agent runs, Plan updates live from plan_* events; Tool Trace stays separate.
+
+MCP:
+  /mcp                 MCP servers status
+  /mcp servers         List configured MCP servers
+  /mcp tools           List discovered MCP tools
+  /mcp connect <id>    Connect a server
+  /mcp disconnect <id> Disconnect a server
+  /mcp reload          Reload config and reconnect
 
 Memory:
   /memory              Memory help

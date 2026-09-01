@@ -21,6 +21,21 @@ class ToolRegistry:
             raise ToolRegistrationError(f"工具已注册，禁止重复：{name}")
         self._tools[name] = tool
 
+    def unregister(self, name: str) -> bool:
+        """按名称移除工具；不存在返回 False。"""
+        key = (name or "").strip()
+        if key not in self._tools:
+            return False
+        del self._tools[key]
+        return True
+
+    def register_or_replace(self, tool: Tool) -> None:
+        """注册或覆盖同名工具（MCP 动态刷新用）。"""
+        name = (tool.name or "").strip()
+        if not name:
+            raise ToolRegistrationError("工具名称不能为空。")
+        self._tools[name] = tool
+
     def get(self, name: str) -> Tool:
         """按名称获取工具；不存在则抛出 ToolNotFoundError。"""
         key = (name or "").strip()
