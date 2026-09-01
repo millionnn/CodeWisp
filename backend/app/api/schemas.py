@@ -229,3 +229,88 @@ class RevertResponse(BaseModel):
     restored_snapshot_ids: list[str] = Field(default_factory=list)
     applied: list[str] = Field(default_factory=list)
     failed: list[dict[str, str]] = Field(default_factory=list)
+
+
+class GitRepositoryInfoResponse(BaseModel):
+    is_git_repository: bool
+    workspace: str
+    repository_root: str | None = None
+
+
+class GitFileStatusResponse(BaseModel):
+    path: str
+    status: str
+    staged: bool = False
+    unstaged: bool = False
+    old_path: str | None = None
+
+
+class GitStatusResponse(BaseModel):
+    is_git_repository: bool = True
+    repository_root: str | None = None
+    branch: str | None = None
+    ahead: int = 0
+    behind: int = 0
+    clean: bool = True
+    detached: bool = False
+    modified_count: int = 0
+    staged_count: int = 0
+    untracked_count: int = 0
+    files: list[GitFileStatusResponse] = Field(default_factory=list)
+
+
+class GitDiffFileResponse(BaseModel):
+    path: str
+    change_type: str
+    additions: int
+    deletions: int
+    patch: str = ""
+
+
+class GitDiffResponse(BaseModel):
+    staged: bool = False
+    total_additions: int = 0
+    total_deletions: int = 0
+    files: list[GitDiffFileResponse] = Field(default_factory=list)
+    patch: str = ""
+
+
+class GitCommitResponse(BaseModel):
+    commit_id: str
+    short_id: str
+    author: str
+    timestamp: str
+    message: str
+
+
+class GitLogResponse(BaseModel):
+    commits: list[GitCommitResponse] = Field(default_factory=list)
+    count: int = 0
+
+
+class GitBranchResponse(BaseModel):
+    name: str
+    current: bool = False
+
+
+class GitBranchesResponse(BaseModel):
+    current: str | None = None
+    branches: list[GitBranchResponse] = Field(default_factory=list)
+
+
+class GitCommitRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+    paths: list[str] = Field(default_factory=list)
+    confirm: bool = Field(
+        ...,
+        description="必须为 true 才执行 commit（等同于用户确认）",
+    )
+
+
+class GitCommitResultResponse(BaseModel):
+    ok: bool
+    denied: bool = False
+    commit_id: str | None = None
+    branch: str | None = None
+    message: str | None = None
+    commit_preview: dict[str, Any] | None = None

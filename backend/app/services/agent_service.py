@@ -31,6 +31,9 @@ from backend.app.changes.revert import RevertService
 from backend.app.changes.tracker import WriteChangeTracker
 from backend.app.context.budget import ContextBudget
 from backend.app.context.manager import DefaultContextManager
+from backend.app.git.context import GitContextProvider
+from backend.app.git.models import CommitPreview, GitBranch, GitCommit, GitDiff, GitRepositoryInfo, GitStatus
+from backend.app.git.service import GitService
 from backend.app.context.models import (
     CheckpointTrigger,
     ContextCheckpoint,
@@ -51,7 +54,7 @@ from backend.app.persistence.snapshot_repository import SnapshotRepository
 from backend.app.persistence.store import SqliteStore
 from backend.app.planning.service import PlannerService
 from backend.app.permissions.decision import PermissionDecision
-from backend.app.permissions.handler import PermissionHandler
+from backend.app.permissions.handler import AlwaysAllowPermissionHandler, PermissionHandler
 from backend.app.permissions.request import PermissionRequest
 from backend.app.providers.errors import (
     InvalidModelError,
@@ -448,6 +451,81 @@ class AgentService:
             "memories": [m.to_dict() for m in self.list_memories(session_id)],
         }
 
+    # ── V1.1 Git boundary ────────────────────────────────────────
+
+    def _git_service_for_session(self, session_id: str) -> GitService:
+        session = self.sessions.get_session(session_id)
+        return GitService(Workspace(session.workspace))
+
+    def git_detect(self, session_id: str) -> GitRepositoryInfo:
+        return self._git_service_for_session(session_id).detect()
+
+    def git_status(self, session_id: str) -> GitStatus | GitRepositoryInfo:
+        return self._git_service_for_session(session_id).status()
+
+    def git_diff(
+        self,
+        session_id: str,
+        *,
+        path: str | None = None,
+        staged: bool = False,
+    ) -> GitDiff:
+        return self._git_service_for_session(session_id).diff(path=path, staged=staged)
+
+    def git_log(self, session_id: str, *, limit: int = 20) -> list[GitCommit]:
+        return self._git_service_for_session(session_id).log(limit=limit)
+
+    def git_branches(self, session_id: str) -> list[GitBranch]:
+        return self._git_service_for_session(session_id).list_branches()
+
+    def git_commit(
+        self,
+        session_id: str,
+        *,
+        message: str,
+        paths: list[str] | None = None,
+        confirm: bool = False,
+        permission_handler: PermissionHandler | None = None,
+    ) -> dict:
+        """Commit via GitService; requires confirm=true."""
+        if not confirm:
+            raise InvalidMessageError("git commit 需要 confirm=true")
+        service = self._git_service_for_session(session_id)
+        preview = service.build_commit_preview(message, paths)
+
+        handler = permission_handler
+        if handler is not None and not isinstance(handler, AlwaysAllowPermissionHandler):
+            perm_req = PermissionRequest(
+                command="git",
+                args=("commit", "-m", message),
+                cwd=".",
+                reason=f"API git commit:\n{preview.render()}",
+                tool_name="git_commit",
+                session_id=session_id,
+            )
+            decision = handler.request(perm_req)
+            if decision is PermissionDecision.DENY:
+                return {
+                    "ok": False,
+                    "denied": True,
+                    "commit_preview": preview.to_dict(),
+                }
+
+        result = service.commit(message, paths)
+        cm = self._context_managers.get(session_id)
+        if cm is not None:
+            cm.refresh_git_context()
+        return {"ok": True, **result, "commit_preview": preview.to_dict()}
+
+    def git_commit_preview(
+        self,
+        session_id: str,
+        *,
+        message: str,
+        paths: list[str] | None = None,
+    ) -> CommitPreview:
+        return self._git_service_for_session(session_id).build_commit_preview(message, paths)
+
     def _context_window_for_session(self, session: Session) -> int | None:
         resolved = self.resolve_model(session)
         if resolved is not None:
@@ -479,6 +557,7 @@ class AgentService:
             model_id=session.model_id,
             planner=self._planner,
             on_retrieve=on_retrieve,
+            git_context_provider=GitContextProvider(session.workspace),
         )
         cm.load()
         self._context_managers[session.session_id] = cm

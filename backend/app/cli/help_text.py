@@ -24,6 +24,12 @@ HELP_TEXT = """\
                        Switch provider + model
 
 [bold]Changes[/]
+  [cyan]/git[/]                 Git repository status
+  [cyan]/git status[/]          Show branch and working tree
+  [cyan]/git diff[/] [path]     Show Git diff
+  [cyan]/git log[/] [limit]     Show recent commits
+  [cyan]/git branch[/]          List branches
+  [cyan]/git commit[/] <msg>    Commit (asks permission)
   [cyan]/diff[/]                Diff latest run (Rich +/−)
   [cyan]/diff[/] step <id>      Diff one AgentStep
   [cyan]/diff[/] run <id>       Diff one AgentRun

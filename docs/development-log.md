@@ -1,5 +1,34 @@
 # 开发日志
 
+## V1.1 Git-Aware Coding Workflow
+
+**日期：** 2026-09-01
+
+### 目标
+
+让 Agent 理解 Git 工作区状态，形成自然 coding workflow（status → inspect → edit → test → diff → optional commit），Git 作为独立 Domain Service，与 Snapshot/Revert 正交。
+
+### 已完成
+
+- `backend/app/git/`：GitDetector / GitRepository / GitPolicy / GitService / GitContextProvider
+- Git Tools：`git_status` / `git_diff` / `git_log` / `git_branch` / `git_commit`
+- ContextManager：Git metadata 注入 Workspace Context（不含完整 diff）
+- AgentService + API：`/api/sessions/{id}/git/*`
+- CLI：`/git status|diff|log|branch|commit`
+- 测试：9 模块 46 cases；全量 **466 passed**
+
+### 设计决策
+
+1. AgentLoop 不含 Git 特判；Tool → GitService → GitRepository
+2. GitPolicy 结构化 ALLOW/ASK/DENY；commit 走 CommitPreview + PermissionHandler
+3. Coding task ≠ auto commit；仅用户明确要求才 git_commit
+4. Snapshot/Revert 负责 Agent 写文件回滚；Git 负责版本控制
+5. 不新增 Git DB 表
+
+详见 [v1.1-git-report.md](./v1.1-git-report.md)
+
+---
+
 ## V1.0+ Semantic Memory & Intelligent Context
 
 **日期：** 2026-08-31

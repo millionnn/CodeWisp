@@ -295,6 +295,16 @@ def run_cli(
             _cmd_memory(agents, current, user_text, output_fn)
             continue
 
+        if lower == "/git" or lower.startswith("/git "):
+            _cmd_git(
+                agents,
+                current,
+                user_text,
+                output_fn=output_fn,
+                permission_handler=permission_handler,
+            )
+            continue
+
         if lower == "/diff" or lower.startswith("/diff "):
             _cmd_diff(
                 agents,
@@ -962,6 +972,124 @@ def _cmd_memory(
                 output_fn(f"  {k}: {v}")
             return
         output_fn("用法: /memory [search|index|rebuild|stats]")
+    except (SessionError, CodeWispError) as exc:
+        output_fn(f"错误: {exc}")
+
+
+def _cmd_git(
+    agents: AgentService,
+    current: Session,
+    user_text: str,
+    *,
+    output_fn: Callable[[str], None],
+    permission_handler: object | None = None,
+) -> None:
+    """``/git`` [status|diff|log|branch|commit] — Git 仓库状态。"""
+    from backend.app.git.errors import GitNotRepositoryError
+    from backend.app.git.models import GitRepositoryInfo, GitStatus
+    from backend.app.tools.builtin.git import create_git_commit_tool
+
+    parts = user_text.strip().split(maxsplit=2)
+    sub = parts[1].lower() if len(parts) > 1 else "status"
+    try:
+        if sub in {"help", ""}:
+            output_fn(
+                "Git commands:\n"
+                "  /git status\n"
+                "  /git diff [path]\n"
+                "  /git log [limit]\n"
+                "  /git branch\n"
+                "  /git commit <message>\n"
+            )
+            return
+
+        if sub == "status":
+            result = agents.git_status(current.session_id)
+            if isinstance(result, GitRepositoryInfo) and not result.is_git_repository:
+                output_fn("（当前 workspace 不是 Git 仓库）")
+                return
+            if isinstance(result, GitStatus):
+                output_fn("Git Repository")
+                output_fn(f"  root: {result.repository_root}")
+                output_fn(f"  branch: {result.branch or '(detached)'}")
+                output_fn("")
+                output_fn("Working Tree")
+                output_fn(f"  modified: {result.modified_count}")
+                output_fn(f"  staged: {result.staged_count}")
+                output_fn(f"  untracked: {result.untracked_count}")
+                if result.clean:
+                    output_fn("  clean: yes")
+                elif result.all_files:
+                    output_fn("")
+                    output_fn("Files:")
+                    for f in result.all_files[:30]:
+                        output_fn(f"  {f.display}")
+            return
+
+        if sub == "diff":
+            path = parts[2].strip() if len(parts) > 2 else None
+            diff = agents.git_diff(current.session_id, path=path)
+            output_fn(diff.render_summary())
+            if diff.patch:
+                output_fn("")
+                output_fn(diff.patch[:8000])
+                if len(diff.patch) > 8000:
+                    output_fn("... (truncated)")
+            return
+
+        if sub == "log":
+            limit = 20
+            if len(parts) > 2:
+                try:
+                    limit = int(parts[2])
+                except ValueError:
+                    pass
+            commits = agents.git_log(current.session_id, limit=limit)
+            output_fn(f"Recent commits ({len(commits)}):")
+            for c in commits:
+                output_fn(f"  {c.render_line()}")
+            return
+
+        if sub == "branch":
+            branches = agents.git_branches(current.session_id)
+            current_branch = agents._git_service_for_session(current.session_id).current_branch()  # noqa: SLF001
+            output_fn(f"Current branch: {current_branch or '(detached)'}")
+            output_fn("Branches:")
+            for b in branches:
+                marker = "*" if b.current else " "
+                output_fn(f"  {marker} {b.name}")
+            return
+
+        if sub == "commit":
+            message = parts[2].strip() if len(parts) > 2 else ""
+            if not message:
+                output_fn("用法: /git commit <message>")
+                return
+            ws = Workspace(current.workspace)
+            tool = create_git_commit_tool(
+                ws,
+                permission_handler=permission_handler,  # type: ignore[arg-type]
+                session_id=current.session_id,
+            )
+            result = tool.execute({"message": message})
+            if result.metadata.get("permission_required"):
+                output_fn("需要用户授权才能 commit。")
+                if result.output and isinstance(result.output, dict):
+                    preview = result.output.get("commit_preview", {})
+                    if preview.get("rendered"):
+                        output_fn(preview["rendered"])
+                return
+            if not result.success:
+                output_fn(f"Commit 失败: {result.error}")
+                return
+            output_fn(f"Committed: {result.output.get('commit_id')}")
+            cm = agents.get_context_manager(current.session_id)
+            cm.refresh_git_context()
+            return
+
+        output_fn("用法: /git [status|diff|log|branch|commit]")
+    except GitNotRepositoryError:
+        output_fn("（当前 workspace 不是 Git 仓库）")
     except (SessionError, CodeWispError) as exc:
         output_fn(f"错误: {exc}")
 

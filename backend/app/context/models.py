@@ -56,6 +56,7 @@ class MemorySourceType(str, Enum):
     TOOL_OBSERVATION = "tool_observation"
     AGENT = "agent"
     PROJECT_RULE = "project_rule"
+    GIT_COMMIT = "git_commit"
 
 
 class CheckpointTrigger(str, Enum):

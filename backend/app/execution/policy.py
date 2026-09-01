@@ -186,7 +186,11 @@ def _command_basename(command: str) -> str:
     # Windows: python.exe（去掉.exe后缀）
     if name.lower().endswith(".exe"):
         name = name[:-4]
-    return name.lower()
+    lowered = name.lower()
+    # pyenv / venv: python3.11 → 视为 python3
+    if lowered.startswith("python3."):
+        return "python3"
+    return lowered
 
 #获取第一个参数
 def _first_arg(args: tuple[str, ...] | list[str]) -> str | None:

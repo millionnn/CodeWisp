@@ -8,6 +8,13 @@ from backend.app.execution.policy import CommandPolicy
 from backend.app.execution.service import ExecutionService
 from backend.app.tools.builtin.calculator import CalculatorTool
 from backend.app.tools.builtin.execution import RunCommandTool
+from backend.app.tools.builtin.git import (
+    create_git_branch_tool,
+    create_git_commit_tool,
+    create_git_diff_tool,
+    create_git_log_tool,
+    create_git_status_tool,
+)
 from backend.app.tools.builtin.time import GetCurrentTimeTool
 from backend.app.tools.builtin.workspace import (
     EditFileTool,
@@ -71,6 +78,20 @@ def create_default_registry(
             on_command_line=on_command_line,
         )
     )
+
+    git_kwargs = {
+        "permission_handler": permission_handler,
+        "session_id": session_id,
+        "agent_run_id": agent_run_id,
+        "on_permission_wait": on_permission_wait,
+        "on_permission_resolved": on_permission_resolved,
+    }
+    registry.register(create_git_status_tool(ws))
+    registry.register(create_git_diff_tool(ws))
+    registry.register(create_git_log_tool(ws))
+    registry.register(create_git_branch_tool(ws, **git_kwargs))  # type: ignore[arg-type]
+    registry.register(create_git_commit_tool(ws, **git_kwargs))  # type: ignore[arg-type]
+
     return registry
 
 

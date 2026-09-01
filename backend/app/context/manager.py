@@ -95,6 +95,7 @@ class AssembledParts:
     plan: str = ""
     memory: str = ""
     retrieved: str = ""
+    git_context: str = ""
     workspace: str = ""
     checkpoint: str = ""
     recent: list[Message] = field(default_factory=list)
@@ -121,6 +122,7 @@ class DefaultContextManager:
         planner: Any | None = None,
         on_retrieve: Any | None = None,
         event_emitter: Any | None = None,
+        git_context_provider: Any | None = None,
     ) -> None:
         self.session_id = session_id
         self.workspace_root = workspace_root
@@ -133,6 +135,7 @@ class DefaultContextManager:
         self._planner = planner
         self._on_retrieve = on_retrieve
         self._event_emitter = event_emitter
+        self._git_context_provider = git_context_provider
 
         self.project_rules = ProjectInstructionSet()
         self.task: TaskState | None = None
@@ -194,6 +197,7 @@ class DefaultContextManager:
 
         self.refresh_project_rules(focus_path=None)
         self.refresh_retrieval(goal)
+        self.refresh_git_context()
 
         need_plan = self.plan is None or self.plan.status in {
             PlanStatus.COMPLETED,
@@ -219,6 +223,14 @@ class DefaultContextManager:
             items = self._on_retrieve(query)
             if items:
                 self.retrieved = list(items)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def refresh_git_context(self) -> None:
+        if self._git_context_provider is None:
+            return
+        try:
+            self._git_context_provider.refresh()
         except Exception:  # noqa: BLE001
             pass
 
@@ -461,6 +473,8 @@ class DefaultContextManager:
                         if done not in self.task.completed_items:
                             self.task.completed_items.append(done)
                         self._advance_plan_on_verify(success=True)
+        elif name.startswith("git_"):
+            self.refresh_git_context()
 
         if self.task:
             self.task.workspace_state = ws
@@ -545,6 +559,7 @@ class DefaultContextManager:
                 if p.endswith("AGENTS.md") or p.endswith("CLAUDE.md"):
                     self.project_rules.invalidate(p)
             self.refresh_project_rules(focus_path=paths[0] if paths else None)
+        self.refresh_git_context()
 
     def status(self, conversation: Conversation | None = None) -> ContextStatus:
         self.ensure_loaded()
@@ -586,6 +601,11 @@ class DefaultContextManager:
             mem_lines.extend(m.render_line() for m in active_memories[:40])
             parts.memory = "\n".join(mem_lines)
         parts.workspace = self._workspace().render()
+        if self._git_context_provider is not None:
+            parts.git_context = (
+                self._git_context_provider.cached
+                or self._git_context_provider.build_workspace_context()
+            )
         if self.latest_checkpoint:
             parts.checkpoint = self.latest_checkpoint.render()
         if self.retrieved:
@@ -610,6 +630,7 @@ class DefaultContextManager:
             ("Plan", parts.plan, ContextPriority.P1),
             ("Durable Memory", parts.memory, ContextPriority.P1),
             ("Retrieved Context", parts.retrieved, ContextPriority.P2),
+            ("Git Context", parts.git_context, ContextPriority.P2),
             ("Workspace State", parts.workspace, ContextPriority.P2),
             ("Checkpoint", parts.checkpoint, ContextPriority.P2),
         ]
@@ -699,6 +720,7 @@ class DefaultContextManager:
             parts.plan,
             parts.memory,
             parts.retrieved,
+            parts.git_context,
             parts.workspace,
             parts.checkpoint,
         ]

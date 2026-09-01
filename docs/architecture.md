@@ -150,7 +150,36 @@ V0.8  Interactive Permission + Live EventSink  ← 当前
 V0.9  Snapshot / Diff / Revert
 V1.0  Hierarchical Context + Planning
 V1.0+ Semantic Memory + Hybrid Retrieval + LLM Planner/Extractor
+V1.1  Git-Aware Coding Workflow  ← 当前
 ```
+
+### V1.1：Git-Aware Coding Workflow
+
+```text
+AgentLoop
+    ↓
+Git Tools
+    ↓
+GitService → GitPolicy → GitRepository (subprocess, shell=False)
+    ↓
+ContextManager ← GitContextProvider (metadata-first)
+    ↓
+FastAPI / CLI /git
+```
+
+核心能力：
+
+- **Git 自动发现**：workspace 及子目录向上查找 `.git`
+- **结构化 status/diff/log/branch/commit**（porcelain / numstat，非人类文本解析）
+- **GitPolicy**：只读 ALLOW；commit ASK；destructive DENY
+- **CommitPreview + Permission**：复用 V0.8 Handler
+- **Context 集成**：branch / counts / changed files / recent commits（按需 git_diff）
+
+| 模块 | 职责 |
+|------|------|
+| `backend/app/git/` | Git 领域服务 |
+| `backend/app/tools/builtin/git/` | Agent Git Tools |
+| `backend/app/api/routes/git.py` | REST 边界 |
 
 ## 终止条件
 
@@ -176,7 +205,7 @@ AgentService
      SemanticIndex (SQLite metadata + local vectors)
 ```
 
-Context 优先级（摘要）：System → Rules → Task/Plan → Memory → Retrieved Code → Workspace → Recent → Tool Output。
+Context 优先级（摘要）：System → Rules → Task/Plan → Memory → Retrieved Code → **Git Context** → Workspace → Recent → Tool Output。
 
 ## 配置项
 
