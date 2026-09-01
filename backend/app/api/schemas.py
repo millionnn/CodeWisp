@@ -314,3 +314,80 @@ class GitCommitResultResponse(BaseModel):
     branch: str | None = None
     message: str | None = None
     commit_preview: dict[str, Any] | None = None
+
+
+class LspPositionResponse(BaseModel):
+    line: int
+    character: int
+
+
+class LspRangeResponse(BaseModel):
+    start: LspPositionResponse
+    end: LspPositionResponse
+
+
+class LspStatusResponse(BaseModel):
+    workspace: str
+    language: str | None = None
+    server: str | None = None
+    status: str
+    message: str = ""
+    capabilities: list[str] = Field(default_factory=list)
+    available: bool = False
+
+
+class LspDiagnosticResponse(BaseModel):
+    message: str
+    severity: str
+    source: str = ""
+    code: str | None = None
+    path: str = ""
+    range: LspRangeResponse | None = None
+
+
+class LspDiagnosticsResponse(BaseModel):
+    path: str | None = None
+    count: int = 0
+    diagnostics: list[LspDiagnosticResponse] = Field(default_factory=list)
+
+
+class LspLocationResponse(BaseModel):
+    path: str
+    uri: str = ""
+    range: LspRangeResponse | None = None
+
+
+class LspSymbolResponse(BaseModel):
+    name: str
+    kind: str
+    path: str = ""
+    range: LspRangeResponse | None = None
+    children: list["LspSymbolResponse"] = Field(default_factory=list)
+
+
+class LspSymbolsResponse(BaseModel):
+    path: str
+    count: int = 0
+    symbols: list[LspSymbolResponse] = Field(default_factory=list)
+
+
+class LspDefinitionResponse(BaseModel):
+    path: str
+    line: int
+    character: int
+    locations: list[LspLocationResponse] = Field(default_factory=list)
+
+
+class LspReferencesResponse(BaseModel):
+    path: str
+    line: int
+    character: int
+    locations: list[LspLocationResponse] = Field(default_factory=list)
+
+
+class LspHoverResponse(BaseModel):
+    path: str
+    line: int
+    character: int
+    contents: str = ""
+    range: LspRangeResponse | None = None

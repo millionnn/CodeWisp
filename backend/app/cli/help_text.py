@@ -47,6 +47,15 @@ HELP_TEXT = """\
   [cyan]/plan refresh[/]        Rebuild plan via Planner
   [dim]During agent runs, Plan updates live from plan_* events; Tool Trace stays separate.[/]
 
+[bold]Code Intelligence[/]
+  [cyan]/lsp[/]                 LSP status
+  [cyan]/lsp status[/]          Language server availability
+  [cyan]/lsp diagnostics[/] [path]
+                       Show diagnostics
+  [cyan]/lsp symbols[/] <path>  Document symbols
+  [cyan]/lsp definition[/] <path> <line> <char>
+  [cyan]/lsp references[/] <path> <line> <char>
+
 [bold]Memory[/]
   [cyan]/memory[/]              Memory help
   [cyan]/memory search[/] <q>   Hybrid semantic + keyword search

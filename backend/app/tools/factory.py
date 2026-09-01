@@ -15,6 +15,13 @@ from backend.app.tools.builtin.git import (
     create_git_log_tool,
     create_git_status_tool,
 )
+from backend.app.tools.builtin.lsp import (
+    create_lsp_definition_tool,
+    create_lsp_diagnostics_tool,
+    create_lsp_hover_tool,
+    create_lsp_references_tool,
+    create_lsp_symbols_tool,
+)
 from backend.app.tools.builtin.time import GetCurrentTimeTool
 from backend.app.tools.builtin.workspace import (
     EditFileTool,
@@ -41,6 +48,7 @@ def create_default_registry(
     on_permission_wait: object | None = None,
     on_permission_resolved: object | None = None,
     on_command_line: object | None = None,
+    lsp_service: object | None = None,
 ) -> ToolRegistry:
     """创建并注册内置工具（只读 / 写入 / 受控执行）。
 
@@ -91,6 +99,13 @@ def create_default_registry(
     registry.register(create_git_log_tool(ws))
     registry.register(create_git_branch_tool(ws, **git_kwargs))  # type: ignore[arg-type]
     registry.register(create_git_commit_tool(ws, **git_kwargs))  # type: ignore[arg-type]
+
+    lsp_kwargs = {"service": lsp_service} if lsp_service is not None else {}
+    registry.register(create_lsp_diagnostics_tool(ws, **lsp_kwargs))  # type: ignore[arg-type]
+    registry.register(create_lsp_definition_tool(ws, **lsp_kwargs))  # type: ignore[arg-type]
+    registry.register(create_lsp_references_tool(ws, **lsp_kwargs))  # type: ignore[arg-type]
+    registry.register(create_lsp_symbols_tool(ws, **lsp_kwargs))  # type: ignore[arg-type]
+    registry.register(create_lsp_hover_tool(ws, **lsp_kwargs))  # type: ignore[arg-type]
 
     return registry
 

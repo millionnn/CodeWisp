@@ -1,5 +1,35 @@
 # 开发日志
 
+## V1.2 LSP-Aware Coding Intelligence
+
+**日期：** 2026-09-01
+
+### 目标
+
+让 Agent 具备代码语义感知（diagnostics / symbols / definition / references / hover），
+在不改 AgentLoop 编排语义的前提下，用 LSP Observation 增强 Self-Correction。
+
+### 已完成
+
+- `backend/app/lsp/`：Detector / Client Protocol / Manager / Service / Policy / Context
+- Adapters：Fake（测试）/ PyrightCli（真实 diagnostics）/ Unavailable（降级）
+- Tools：`lsp_diagnostics` / `lsp_definition` / `lsp_references` / `lsp_symbols` / `lsp_hover`
+- ContextManager：LSP metadata 注入；edit 后 refresh
+- AgentService + API：`/api/sessions/{id}/lsp/*`
+- CLI：`/lsp status|diagnostics|symbols|definition|references|hover`
+- 测试：8 模块 29 cases；全量 **495 passed**
+
+### 设计决策
+
+1. AgentLoop 不含 LSP 特判；不硬编码 edit→diagnostics 循环
+2. LSP 只读 ALLOW；不可用时结构化失败，Agent 继续
+3. 不自动安装语言服务器；测试不依赖真实 Pyright
+4. 不新增 LSP 数据库；与 Git / Snapshot 正交
+
+详见 [v1.2-lsp-report.md](./v1.2-lsp-report.md)
+
+---
+
 ## V1.1 Git-Aware Coding Workflow
 
 **日期：** 2026-09-01

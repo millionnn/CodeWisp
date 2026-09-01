@@ -34,6 +34,17 @@ from backend.app.context.manager import DefaultContextManager
 from backend.app.git.context import GitContextProvider
 from backend.app.git.models import CommitPreview, GitBranch, GitCommit, GitDiff, GitRepositoryInfo, GitStatus
 from backend.app.git.service import GitService
+from backend.app.lsp.context import LSPContextProvider
+from backend.app.lsp.manager import LanguageServerManager, get_default_manager
+from backend.app.lsp.models import (
+    DefinitionResult,
+    Diagnostic,
+    HoverResult,
+    LspStatus,
+    ReferenceResult,
+    Symbol,
+)
+from backend.app.lsp.service import LSPService
 from backend.app.context.models import (
     CheckpointTrigger,
     ContextCheckpoint,
@@ -133,6 +144,7 @@ class AgentService:
         self._session_locks: dict[str, threading.Lock] = {}
         # 进程内缓存：供 CLI /context 诊断（重启后可从 SQLite 重建）
         self._context_managers: dict[str, DefaultContextManager] = {}
+        self._lsp_manager: LanguageServerManager = get_default_manager()
 
     def resume(self, session_id: str) -> SessionResumeState:
         """恢复 Session 历史（不跑 Agent）。等价于 ``sessions.resume_session``。"""
@@ -526,6 +538,53 @@ class AgentService:
     ) -> CommitPreview:
         return self._git_service_for_session(session_id).build_commit_preview(message, paths)
 
+    # ── V1.2 LSP boundary ────────────────────────────────────────
+
+    def _lsp_service_for_session(self, session_id: str) -> LSPService:
+        session = self.sessions.get_session(session_id)
+        return LSPService(Workspace(session.workspace), manager=self._lsp_manager)
+
+    def lsp_status(self, session_id: str) -> LspStatus:
+        return self._lsp_service_for_session(session_id).status()
+
+    def lsp_diagnostics(
+        self, session_id: str, *, path: str | None = None
+    ) -> list[Diagnostic]:
+        return self._lsp_service_for_session(session_id).diagnostics(path)
+
+    def lsp_symbols(self, session_id: str, *, path: str) -> list[Symbol]:
+        return self._lsp_service_for_session(session_id).symbols(path)
+
+    def lsp_definition(
+        self,
+        session_id: str,
+        *,
+        path: str,
+        line: int,
+        character: int,
+    ) -> DefinitionResult:
+        return self._lsp_service_for_session(session_id).definition(path, line, character)
+
+    def lsp_references(
+        self,
+        session_id: str,
+        *,
+        path: str,
+        line: int,
+        character: int,
+    ) -> ReferenceResult:
+        return self._lsp_service_for_session(session_id).references(path, line, character)
+
+    def lsp_hover(
+        self,
+        session_id: str,
+        *,
+        path: str,
+        line: int,
+        character: int,
+    ) -> HoverResult:
+        return self._lsp_service_for_session(session_id).hover(path, line, character)
+
     def _context_window_for_session(self, session: Session) -> int | None:
         resolved = self.resolve_model(session)
         if resolved is not None:
@@ -558,6 +617,9 @@ class AgentService:
             planner=self._planner,
             on_retrieve=on_retrieve,
             git_context_provider=GitContextProvider(session.workspace),
+            lsp_context_provider=LSPContextProvider(
+                session.workspace, manager=self._lsp_manager
+            ),
         )
         cm.load()
         self._context_managers[session.session_id] = cm
@@ -749,6 +811,7 @@ class AgentService:
             on_permission_wait=on_permission_wait if handler else None,
             on_permission_resolved=on_permission_resolved if handler else None,
             on_command_line=on_command_line,
+            lsp_service=LSPService(workspace, manager=self._lsp_manager),
         )
         executor = ToolExecutor(registry)
         loop = AgentLoop(

@@ -150,7 +150,8 @@ V0.8  Interactive Permission + Live EventSink  ← 当前
 V0.9  Snapshot / Diff / Revert
 V1.0  Hierarchical Context + Planning
 V1.0+ Semantic Memory + Hybrid Retrieval + LLM Planner/Extractor
-V1.1  Git-Aware Coding Workflow  ← 当前
+V1.1  Git-Aware Coding Workflow
+V1.2  LSP-Aware Coding Intelligence  ← 当前
 ```
 
 ### V1.1：Git-Aware Coding Workflow
@@ -181,6 +182,31 @@ FastAPI / CLI /git
 | `backend/app/tools/builtin/git/` | Agent Git Tools |
 | `backend/app/api/routes/git.py` | REST 边界 |
 
+### V1.2：LSP-Aware Coding Intelligence
+
+```text
+AgentLoop
+    ↓
+LSP Tools (read-only)
+    ↓
+LSPService → LanguageServerManager → Client (Pyright / Fake / Unavailable)
+    ↓
+ContextManager ← LSPContextProvider (metadata-first)
+```
+
+核心能力：
+
+- **Language detection**：py/ts/js/java/rs；server 缺失则 unavailable，不崩溃
+- **Diagnostics / Symbols / Definition / References / Hover**
+- **Python 优先**：Pyright CLI（`--outputjson`）；不自动安装
+- **Graceful degradation**：LSP 是增强能力，不是单点故障
+
+| 模块 | 职责 |
+|------|------|
+| `backend/app/lsp/` | LSP 领域服务 |
+| `backend/app/tools/builtin/lsp/` | Agent LSP Tools |
+| `backend/app/api/routes/lsp.py` | REST 边界 |
+
 ## 终止条件
 
 | 状态 | 含义 |
@@ -205,7 +231,7 @@ AgentService
      SemanticIndex (SQLite metadata + local vectors)
 ```
 
-Context 优先级（摘要）：System → Rules → Task/Plan → Memory → Retrieved Code → **Git Context** → Workspace → Recent → Tool Output。
+Context 优先级（摘要）：System → Rules → Task/Plan → Memory → Retrieved Code → **Git Context** → **LSP Context** → Workspace → Recent → Tool Output。
 
 ## 配置项
 

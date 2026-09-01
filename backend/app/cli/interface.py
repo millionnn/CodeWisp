@@ -305,6 +305,10 @@ def run_cli(
             )
             continue
 
+        if lower == "/lsp" or lower.startswith("/lsp "):
+            _cmd_lsp(agents, current, user_text, output_fn=output_fn)
+            continue
+
         if lower == "/diff" or lower.startswith("/diff "):
             _cmd_diff(
                 agents,
@@ -1090,6 +1094,114 @@ def _cmd_git(
         output_fn("用法: /git [status|diff|log|branch|commit]")
     except GitNotRepositoryError:
         output_fn("（当前 workspace 不是 Git 仓库）")
+    except (SessionError, CodeWispError) as exc:
+        output_fn(f"错误: {exc}")
+
+
+def _cmd_lsp(
+    agents: AgentService,
+    current: Session,
+    user_text: str,
+    *,
+    output_fn: Callable[[str], None],
+) -> None:
+    """``/lsp`` [status|diagnostics|symbols|definition|references]"""
+    from backend.app.lsp.errors import LspError
+
+    parts = user_text.strip().split()
+    sub = parts[1].lower() if len(parts) > 1 else "status"
+    try:
+        if sub in {"help", ""}:
+            output_fn(
+                "LSP commands:\n"
+                "  /lsp status\n"
+                "  /lsp diagnostics [path]\n"
+                "  /lsp symbols <path>\n"
+                "  /lsp definition <path> <line> <character>\n"
+                "  /lsp references <path> <line> <character>\n"
+                "  /lsp hover <path> <line> <character>\n"
+                "Positions are 0-based (LSP convention).\n"
+            )
+            return
+
+        if sub == "status":
+            status = agents.lsp_status(current.session_id)
+            output_fn(status.render())
+            return
+
+        if sub == "diagnostics":
+            path = parts[2] if len(parts) > 2 else None
+            diags = agents.lsp_diagnostics(current.session_id, path=path)
+            output_fn("LSP Diagnostics")
+            output_fn("────────────────────────────────")
+            if not diags:
+                output_fn("✓ clean")
+                return
+            by_path: dict[str, list] = {}
+            for d in diags:
+                by_path.setdefault(d.path or path or "?", []).append(d)
+            for p, items in by_path.items():
+                output_fn("")
+                output_fn(p)
+                for d in items:
+                    output_fn(f"  {d.render_line()}")
+            output_fn("")
+            output_fn(f"{len(diags)} diagnostics")
+            return
+
+        if sub == "symbols":
+            if len(parts) < 3:
+                output_fn("用法: /lsp symbols <path>")
+                return
+            path = parts[2]
+            symbols = agents.lsp_symbols(current.session_id, path=path)
+            output_fn(path)
+            if not symbols:
+                output_fn("  (no symbols)")
+                return
+            for sym in symbols:
+                for line in sym.render_tree():
+                    output_fn(line)
+            return
+
+        if sub in {"definition", "references", "hover"}:
+            if len(parts) < 5:
+                output_fn(f"用法: /lsp {sub} <path> <line> <character>")
+                return
+            path, line_s, char_s = parts[2], parts[3], parts[4]
+            line, character = int(line_s), int(char_s)
+            if sub == "definition":
+                result = agents.lsp_definition(
+                    current.session_id, path=path, line=line, character=character
+                )
+                output_fn(f"Definition @ {path}:{line}:{character}")
+                if not result.locations:
+                    output_fn("  (none)")
+                for loc in result.locations:
+                    output_fn(f"  {loc.render_line()}")
+                return
+            if sub == "references":
+                result = agents.lsp_references(
+                    current.session_id, path=path, line=line, character=character
+                )
+                output_fn(f"References @ {path}:{line}:{character}")
+                if not result.locations:
+                    output_fn("  (none)")
+                for loc in result.locations:
+                    output_fn(f"  {loc.render_line()}")
+                return
+            hover = agents.lsp_hover(
+                current.session_id, path=path, line=line, character=character
+            )
+            output_fn(f"Hover @ {path}:{line}:{character}")
+            output_fn(hover.contents or "(empty)")
+            return
+
+        output_fn("用法: /lsp [status|diagnostics|symbols|definition|references|hover]")
+    except LspError as exc:
+        output_fn(f"LSP: {exc}")
+    except (ValueError, TypeError) as exc:
+        output_fn(f"参数错误: {exc}")
     except (SessionError, CodeWispError) as exc:
         output_fn(f"错误: {exc}")
 

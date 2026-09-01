@@ -96,6 +96,7 @@ class AssembledParts:
     memory: str = ""
     retrieved: str = ""
     git_context: str = ""
+    lsp_context: str = ""
     workspace: str = ""
     checkpoint: str = ""
     recent: list[Message] = field(default_factory=list)
@@ -123,6 +124,7 @@ class DefaultContextManager:
         on_retrieve: Any | None = None,
         event_emitter: Any | None = None,
         git_context_provider: Any | None = None,
+        lsp_context_provider: Any | None = None,
     ) -> None:
         self.session_id = session_id
         self.workspace_root = workspace_root
@@ -136,6 +138,7 @@ class DefaultContextManager:
         self._on_retrieve = on_retrieve
         self._event_emitter = event_emitter
         self._git_context_provider = git_context_provider
+        self._lsp_context_provider = lsp_context_provider
 
         self.project_rules = ProjectInstructionSet()
         self.task: TaskState | None = None
@@ -198,6 +201,7 @@ class DefaultContextManager:
         self.refresh_project_rules(focus_path=None)
         self.refresh_retrieval(goal)
         self.refresh_git_context()
+        self.refresh_lsp_context()
 
         need_plan = self.plan is None or self.plan.status in {
             PlanStatus.COMPLETED,
@@ -231,6 +235,16 @@ class DefaultContextManager:
             return
         try:
             self._git_context_provider.refresh()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def refresh_lsp_context(self, *, focus_path: str | None = None) -> None:
+        if self._lsp_context_provider is None:
+            return
+        try:
+            if focus_path and hasattr(self._lsp_context_provider, "set_focus_path"):
+                self._lsp_context_provider.set_focus_path(focus_path)
+            self._lsp_context_provider.refresh()
         except Exception:  # noqa: BLE001
             pass
 
@@ -435,6 +449,7 @@ class DefaultContextManager:
                 if note not in self.task.completed_items:
                     self.task.completed_items.append(note)
                 self._advance_plan_on_edit()
+            self.refresh_lsp_context(focus_path=paths[0])
         elif name == "read_file" and paths:
             for p in paths:
                 if p not in ws.active_files:
@@ -475,6 +490,13 @@ class DefaultContextManager:
                         self._advance_plan_on_verify(success=True)
         elif name.startswith("git_"):
             self.refresh_git_context()
+        elif name.startswith("lsp_"):
+            focus = None
+            if paths:
+                focus = paths[0]
+            elif isinstance(args.get("path"), str):
+                focus = args["path"]
+            self.refresh_lsp_context(focus_path=focus)
 
         if self.task:
             self.task.workspace_state = ws
@@ -560,6 +582,7 @@ class DefaultContextManager:
                     self.project_rules.invalidate(p)
             self.refresh_project_rules(focus_path=paths[0] if paths else None)
         self.refresh_git_context()
+        self.refresh_lsp_context()
 
     def status(self, conversation: Conversation | None = None) -> ContextStatus:
         self.ensure_loaded()
@@ -606,6 +629,11 @@ class DefaultContextManager:
                 self._git_context_provider.cached
                 or self._git_context_provider.build_workspace_context()
             )
+        if self._lsp_context_provider is not None:
+            parts.lsp_context = (
+                self._lsp_context_provider.cached
+                or self._lsp_context_provider.build_workspace_context()
+            )
         if self.latest_checkpoint:
             parts.checkpoint = self.latest_checkpoint.render()
         if self.retrieved:
@@ -631,6 +659,7 @@ class DefaultContextManager:
             ("Durable Memory", parts.memory, ContextPriority.P1),
             ("Retrieved Context", parts.retrieved, ContextPriority.P2),
             ("Git Context", parts.git_context, ContextPriority.P2),
+            ("LSP Context", parts.lsp_context, ContextPriority.P2),
             ("Workspace State", parts.workspace, ContextPriority.P2),
             ("Checkpoint", parts.checkpoint, ContextPriority.P2),
         ]
@@ -721,6 +750,7 @@ class DefaultContextManager:
             parts.memory,
             parts.retrieved,
             parts.git_context,
+            parts.lsp_context,
             parts.workspace,
             parts.checkpoint,
         ]
