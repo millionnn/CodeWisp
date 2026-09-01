@@ -57,7 +57,7 @@ def render_markdown(
     console.print(
         Panel(
             content,
-            title="[cw.agent]CodeWisp[/]",
+            title="[cw.plan]✦ Final Answer[/]",
             border_style="cyan",
             padding=(0, 1),
             expand=True,

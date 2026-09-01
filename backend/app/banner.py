@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-# 与当前里程碑对齐（V0.6 Session & Backend）
-__version__ = "0.6.0"
+__version__ = "1.2.0"
 APP_NAME = "CodeWisp"
 TAGLINE = "From-scratch Coding Agent Runtime"
 COPYRIGHT = "Copyright (c) 2026 CodeWisp Authors"
 LICENSE_LINE = "Licensed for local development and evaluation."
 
-# 等宽 ASCII 大字（约 56 列，常见终端可完整显示）
+# 等宽 ASCII 大字（约 56 列）
 ASCII_BANNER = r"""
    ______          __    _       ___         
   / ____/___  ____/ /__ | |     / (_)________
@@ -53,6 +52,35 @@ def print_app_banner(
     version: str | None = None,
     output_fn: Callable[[str], None] = print,
 ) -> None:
-    """打印 ASCII Banner + 版本/版权。"""
-    output_fn(format_banner(version=version))
+    """打印 ASCII Banner + 版本/版权（TTY 下带品牌色）。"""
+    text = format_banner(version=version)
+    if output_fn is print:
+        try:
+            import sys
+
+            from backend.app.cli.theme import get_theme, make_console
+
+            if sys.stdout.isatty() and get_theme().rich_enabled:
+                from rich.panel import Panel
+                from rich.text import Text
+
+                ver = version or __version__
+                body = Text()
+                body.append(ASCII_BANNER + "\n\n", style="bold cyan")
+                body.append(f"  {APP_NAME}", style="bold white")
+                body.append(f"  v{ver}\n", style="cyan")
+                body.append(f"  {TAGLINE}\n", style="dim")
+                body.append(f"\n  {COPYRIGHT}\n", style="dim")
+                body.append(f"  {LICENSE_LINE}", style="dim")
+                make_console().print(
+                    Panel(
+                        body,
+                        border_style="cyan",
+                        padding=(0, 1),
+                    )
+                )
+                return
+        except Exception:  # noqa: BLE001
+            pass
+    output_fn(text)
     output_fn("")

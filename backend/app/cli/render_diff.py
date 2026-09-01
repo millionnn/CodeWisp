@@ -103,6 +103,18 @@ def format_numbered_diff(diff: FileDiff) -> str:
     return "\n".join(lines)
 
 
+def count_line_stats(diff: FileDiff) -> tuple[int, int]:
+    """Public: (additions, deletions) for a FileDiff."""
+    return _count_line_stats(diff)
+
+
+def format_file_stat_label(diff: FileDiff) -> str:
+    """Label for pickers: ``M path  +12 -3``."""
+    adds, dels = _count_line_stats(diff)
+    badge = _badge(diff.change_type)
+    return f"{badge} {diff.path}  +{adds} -{dels}"
+
+
 def render_file_diffs(
     diffs: list[FileDiff],
     *,

@@ -17,8 +17,18 @@ from backend.app.banner import print_app_banner
 from backend.app.cli.event_sink import CliEventSink
 from backend.app.cli.help_text import HELP_TEXT, HELP_TEXT_PLAIN
 from backend.app.cli.prompt import read_line
-from backend.app.cli.render_diff import render_file_diffs
+from backend.app.cli.render_diff import format_file_stat_label, render_file_diffs
 from backend.app.cli.render_md import render_markdown
+from backend.app.cli.render_panels import (
+    render_git_branches,
+    render_git_diff,
+    render_git_log,
+    render_git_status,
+    render_lsp_diagnostics,
+    render_lsp_status,
+    render_lsp_symbols,
+    render_section,
+)
 from backend.app.cli.select import select_option
 from backend.app.cli.status_bar import (
     DEFAULT_SESSION_TITLES,
@@ -49,14 +59,48 @@ def print_banner(
     output_fn: Callable[[str], None] = print,
 ) -> None:
     print_app_banner(output_fn=output_fn)
+    theme = get_theme()
+    rows: list[tuple[str, str]] = []
     if workspace_root is not None:
-        output_fn(f"  Workspace : {workspace_root}")
+        rows.append(("Workspace", str(workspace_root)))
     if session is not None:
-        output_fn(f"  Session   : {session.session_id} ({session.title})")
-        output_fn(f"  Model     : {session.provider_id}/{session.model_id}")
+        rows.append(("Session", f"{session.session_id} ({session.title})"))
+        rows.append(("Model", f"{session.provider_id}/{session.model_id}"))
+    cmds = (
+        "/help /use /model /plan /context /memory\n"
+        "  /git /lsp /diff /revert /status /exit"
+    )
+    if output_fn is print and theme.rich_enabled:
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich.text import Text
+
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column("k", style="cw.key", width=10)
+        table.add_column("v", style="cw.value")
+        for k, v in rows:
+            table.add_row(k, v)
+        table.add_row("Commands", cmds)
+        tip = Text("\n↑↓ Enter 选择 · 输入任务继续当前 Session", style="cw.dim")
+        from rich.console import Group
+
+        make_console().print(
+            Panel(
+                Group(table, tip),
+                title="[cw.brand]Session[/]",
+                title_align="left",
+                border_style="dim",
+                padding=(0, 1),
+            )
+        )
+        make_console().print()
+        return
+
+    for k, v in rows:
+        output_fn(f"  {k:<10}: {v}")
     output_fn("")
     output_fn("  Commands  : /help  /sessions  /session  /new  /use  /history")
-    output_fn("              /providers  /models  /model  /diff  /revert")
+    output_fn("              /providers  /models  /model  /git  /lsp  /diff  /revert")
     output_fn("              /context  /plan  /memory  /status  /delete  /exit")
     output_fn("  Type a task to continue the current Session.\n")
 
@@ -129,7 +173,7 @@ def _discard_unused_session(
     agents: AgentService,
     session: Session,
     *,
-    output_fn: Callable[[str], None] | None = None,
+    output_fn: Callable[[str], None] | None = None,  # noqa: ARG001 — 保持调用方签名，静默丢弃
 ) -> bool:
     if _session_has_dialogue(agents, session.session_id):
         return False
@@ -137,8 +181,6 @@ def _discard_unused_session(
         agents.sessions.delete_session(session.session_id)
     except SessionError:
         return False
-    if output_fn is not None:
-        output_fn(f"（已丢弃未使用的空 Session: {session.session_id}）")
     return True
 
 
@@ -416,11 +458,7 @@ def run_cli(
                 )
             except Exception:  # noqa: BLE001
                 status_bar.update_context(used=None, budget=None)
-            output_fn(
-                f"已切换到 Session: {current.session_id} ({current.title})\n"
-                f"Model: {current.provider_id}/{current.model_id}\n"
-                f"Workspace: {current.workspace}"
-            )
+            # 切换成功即可；Session/Model/Workspace 已在 banner / footer，勿再刷系统信息
             continue
 
         cmd_word = user_text.split(maxsplit=1)[0].lower()
@@ -1013,32 +1051,13 @@ def _cmd_git(
                 output_fn("（当前 workspace 不是 Git 仓库）")
                 return
             if isinstance(result, GitStatus):
-                output_fn("Git Repository")
-                output_fn(f"  root: {result.repository_root}")
-                output_fn(f"  branch: {result.branch or '(detached)'}")
-                output_fn("")
-                output_fn("Working Tree")
-                output_fn(f"  modified: {result.modified_count}")
-                output_fn(f"  staged: {result.staged_count}")
-                output_fn(f"  untracked: {result.untracked_count}")
-                if result.clean:
-                    output_fn("  clean: yes")
-                elif result.all_files:
-                    output_fn("")
-                    output_fn("Files:")
-                    for f in result.all_files[:30]:
-                        output_fn(f"  {f.display}")
+                render_git_status(result, output_fn=output_fn)
             return
 
         if sub == "diff":
             path = parts[2].strip() if len(parts) > 2 else None
             diff = agents.git_diff(current.session_id, path=path)
-            output_fn(diff.render_summary())
-            if diff.patch:
-                output_fn("")
-                output_fn(diff.patch[:8000])
-                if len(diff.patch) > 8000:
-                    output_fn("... (truncated)")
+            render_git_diff(diff, output_fn=output_fn)
             return
 
         if sub == "log":
@@ -1049,19 +1068,13 @@ def _cmd_git(
                 except ValueError:
                     pass
             commits = agents.git_log(current.session_id, limit=limit)
-            output_fn(f"Recent commits ({len(commits)}):")
-            for c in commits:
-                output_fn(f"  {c.render_line()}")
+            render_git_log(commits, output_fn=output_fn)
             return
 
         if sub == "branch":
             branches = agents.git_branches(current.session_id)
             current_branch = agents._git_service_for_session(current.session_id).current_branch()  # noqa: SLF001
-            output_fn(f"Current branch: {current_branch or '(detached)'}")
-            output_fn("Branches:")
-            for b in branches:
-                marker = "*" if b.current else " "
-                output_fn(f"  {marker} {b.name}")
+            render_git_branches(branches, current=current_branch, output_fn=output_fn)
             return
 
         if sub == "commit":
@@ -1086,7 +1099,16 @@ def _cmd_git(
             if not result.success:
                 output_fn(f"Commit 失败: {result.error}")
                 return
-            output_fn(f"Committed: {result.output.get('commit_id')}")
+            commit_id = (
+                result.output.get("commit_id")
+                if isinstance(result.output, dict)
+                else None
+            )
+            render_section(
+                "Git Commit",
+                [("Status", "ok"), ("Commit", str(commit_id or "?"))],
+                output_fn=output_fn,
+            )
             cm = agents.get_context_manager(current.session_id)
             cm.refresh_git_context()
             return
@@ -1126,27 +1148,13 @@ def _cmd_lsp(
 
         if sub == "status":
             status = agents.lsp_status(current.session_id)
-            output_fn(status.render())
+            render_lsp_status(status, output_fn=output_fn)
             return
 
         if sub == "diagnostics":
             path = parts[2] if len(parts) > 2 else None
             diags = agents.lsp_diagnostics(current.session_id, path=path)
-            output_fn("LSP Diagnostics")
-            output_fn("────────────────────────────────")
-            if not diags:
-                output_fn("✓ clean")
-                return
-            by_path: dict[str, list] = {}
-            for d in diags:
-                by_path.setdefault(d.path or path or "?", []).append(d)
-            for p, items in by_path.items():
-                output_fn("")
-                output_fn(p)
-                for d in items:
-                    output_fn(f"  {d.render_line()}")
-            output_fn("")
-            output_fn(f"{len(diags)} diagnostics")
+            render_lsp_diagnostics(diags, path=path, output_fn=output_fn)
             return
 
         if sub == "symbols":
@@ -1155,13 +1163,7 @@ def _cmd_lsp(
                 return
             path = parts[2]
             symbols = agents.lsp_symbols(current.session_id, path=path)
-            output_fn(path)
-            if not symbols:
-                output_fn("  (no symbols)")
-                return
-            for sym in symbols:
-                for line in sym.render_tree():
-                    output_fn(line)
+            render_lsp_symbols(path, symbols, output_fn=output_fn)
             return
 
         if sub in {"definition", "references", "hover"}:
@@ -1174,27 +1176,51 @@ def _cmd_lsp(
                 result = agents.lsp_definition(
                     current.session_id, path=path, line=line, character=character
                 )
-                output_fn(f"Definition @ {path}:{line}:{character}")
-                if not result.locations:
-                    output_fn("  (none)")
-                for loc in result.locations:
-                    output_fn(f"  {loc.render_line()}")
+                rows = [
+                    ("Target", f"{path}:{line}:{character}"),
+                    ("Hits", str(len(result.locations))),
+                ]
+                footer = None
+                if result.locations:
+                    footer = "\n".join(f"  {loc.render_line()}" for loc in result.locations)
+                else:
+                    footer = "  (none)"
+                render_section(
+                    "LSP Definition",
+                    rows,
+                    output_fn=output_fn,
+                    footer=footer,
+                )
                 return
             if sub == "references":
                 result = agents.lsp_references(
                     current.session_id, path=path, line=line, character=character
                 )
-                output_fn(f"References @ {path}:{line}:{character}")
-                if not result.locations:
-                    output_fn("  (none)")
-                for loc in result.locations:
-                    output_fn(f"  {loc.render_line()}")
+                rows = [
+                    ("Target", f"{path}:{line}:{character}"),
+                    ("Hits", str(len(result.locations))),
+                ]
+                footer = (
+                    "\n".join(f"  {loc.render_line()}" for loc in result.locations)
+                    if result.locations
+                    else "  (none)"
+                )
+                render_section(
+                    "LSP References",
+                    rows,
+                    output_fn=output_fn,
+                    footer=footer,
+                )
                 return
             hover = agents.lsp_hover(
                 current.session_id, path=path, line=line, character=character
             )
-            output_fn(f"Hover @ {path}:{line}:{character}")
-            output_fn(hover.contents or "(empty)")
+            render_section(
+                "LSP Hover",
+                [("Target", f"{path}:{line}:{character}")],
+                output_fn=output_fn,
+                footer=hover.contents or "(empty)",
+            )
             return
 
         output_fn("用法: /lsp [status|diagnostics|symbols|definition|references|hover]")
@@ -1367,11 +1393,12 @@ def _cmd_revert(
     kind, target_id = _parse_change_target(user_text, command="/revert")
     try:
         if kind is None and target_id is None:
+            # 默认先列最近有变更的 Step（带 +/-），再可选切到 Run
             kind = select_option(
-                "Revert 范围",
+                "Revert 什么？",
                 [
-                    ("step", "Step — 撤销单个 AgentStep"),
-                    ("run", "Run — 撤销整个 AgentRun"),
+                    ("step", "Step — 选一次改动（推荐，可看各文件 +/-）"),
+                    ("run", "Run — 撤销整轮 AgentRun 的全部改动"),
                 ],
                 default_index=0,
                 input_fn=input_fn,
@@ -1398,14 +1425,17 @@ def _cmd_revert(
             if step.session_id != current.session_id:
                 output_fn("错误：该 Step 不属于当前 Session。")
                 return
+            run = agents.sessions.runs.get_run(step.agent_run_id)
             diffs = agents.get_step_file_diffs(step_id)
-            if diffs:
-                run = agents.sessions.runs.get_run(step.agent_run_id)
-                render_file_diffs(
-                    diffs,
-                    title=f"Will revert · {_human_step_label(agents, step_id, run)}",
-                    output_fn=output_fn,
-                )
+            title = _human_step_label(agents, step_id, run)
+            if not _browse_revert_diffs(
+                diffs,
+                scope_label=f"Step · {title}",
+                output_fn=output_fn,
+                input_fn=input_fn,
+            ):
+                output_fn("已取消。")
+                return
             report = agents.revert_step(
                 step_id,
                 permission_handler=permission_handler,
@@ -1432,12 +1462,15 @@ def _cmd_revert(
                 output_fn("错误：该 Run 不属于当前 Session。")
                 return
             diffs = agents.get_run_file_diffs(run_id)
-            if diffs:
-                render_file_diffs(
-                    diffs,
-                    title=f"Will revert · {_human_run_label(agents, run)}",
-                    output_fn=output_fn,
-                )
+            title = _human_run_label(agents, run)
+            if not _browse_revert_diffs(
+                diffs,
+                scope_label=f"Run · {title}",
+                output_fn=output_fn,
+                input_fn=input_fn,
+            ):
+                output_fn("已取消。")
+                return
             report = agents.revert_run(
                 run_id,
                 permission_handler=permission_handler,
@@ -1458,22 +1491,144 @@ def _cmd_revert(
         raise
 
 
+def _browse_revert_diffs(
+    diffs: list,
+    *,
+    scope_label: str,
+    output_fn: Callable[[str], None],
+    input_fn: Callable[[str], str | None] | None,
+) -> bool:
+    """文件列表（含 +/-）→ 可选看单文件 diff → 确认整体 Revert。
+
+    返回 True 表示用户确认执行 revert（仍需 PermissionHandler）。
+    无文件时直接确认。
+    """
+    from backend.app.changes.models import ChangeType, FileDiff
+
+    real: list[FileDiff] = [
+        d
+        for d in diffs
+        if isinstance(d, FileDiff) and d.change_type is not ChangeType.UNCHANGED
+    ]
+    if not real:
+        picked = select_option(
+            f"Revert · {scope_label}",
+            [
+                ("__revert__", "↩ Confirm revert（无文件变更记录）"),
+            ],
+            default_index=0,
+            input_fn=input_fn,
+            output_fn=output_fn,
+        )
+        return picked == "__revert__"
+
+    while True:
+        choices: list[tuple[str, str]] = [
+            (f"file:{i}", format_file_stat_label(d)) for i, d in enumerate(real)
+        ]
+        choices.append(
+            ("__revert__", f"↩ Revert entire · {len(real)} file(s)")
+        )
+        picked = select_option(
+            f"Revert · {scope_label}",
+            choices,
+            default_index=len(choices) - 1,
+            input_fn=input_fn,
+            output_fn=output_fn,
+        )
+        if picked is None:
+            return False
+        if picked == "__revert__":
+            return True
+        if isinstance(picked, str) and picked.startswith("file:"):
+            idx = int(picked.split(":", 1)[1])
+            one = real[idx]
+            render_file_diffs(
+                [one],
+                title=f"Diff · {format_file_stat_label(one)}",
+                output_fn=output_fn,
+            )
+            action = select_option(
+                f"{one.path}",
+                [
+                    ("__back__", "← Back to file list"),
+                    ("__revert__", f"↩ Revert entire · {len(real)} file(s)"),
+                ],
+                default_index=0,
+                input_fn=input_fn,
+                output_fn=output_fn,
+            )
+            if action is None:
+                return False
+            if action == "__revert__":
+                return True
+            # __back__ → loop
+            continue
+        return False
+
+
 def _print_revert_report(report, output_fn: Callable[[str], None]) -> None:
+    """用户可读的 Revert 结果（不展示 step_/snap_ 等内部 id）。"""
+    from backend.app.cli.theme import get_theme, make_console
+
+    files = [p for p in (report.applied or []) if p]
+    n = len(files)
+
+    def _plain_ok() -> None:
+        output_fn(f"✓ Revert 完成 — 已恢复 {n} 个文件")
+        for p in files[:12]:
+            output_fn(f"  · {p}")
+        if n > 12:
+            output_fn(f"  · … +{n - 12} more")
+
+    def _plain_deny() -> None:
+        output_fn("✗ 已取消 Revert — 工作区未改动")
+
+    def _plain_partial() -> None:
+        output_fn("⚠ Revert 部分完成")
+        for p in files[:8]:
+            output_fn(f"  · restored  {p}")
+        failed = report.failed or {}
+        if isinstance(failed, dict):
+            for path, err in list(failed.items())[:8]:
+                output_fn(f"  · failed    {path}: {err}")
+        else:
+            output_fn(f"  · failed    {failed}")
+
+    use_rich = output_fn is print and get_theme().rich_enabled
     if report.denied:
-        output_fn("已拒绝 Revert（Permission DENY）。工作区未改动。")
+        if use_rich:
+            make_console().print("[cw.fail]✗[/] [cw.value]已取消 Revert[/] [cw.dim]— 工作区未改动[/]")
+        else:
+            _plain_deny()
         return
     if report.ok:
-        output_fn(
-            f"Revert 完成：{report.target_type} {report.target_id}\n"
-            f"  已恢复文件: {', '.join(report.applied) or '（无）'}\n"
-            f"  safety snapshot: {report.safety_snapshot_id}"
-        )
+        if use_rich:
+            console = make_console()
+            console.print(
+                f"[cw.ok]✓[/] [cw.value]Revert 完成[/] [cw.dim]— 已恢复 {n} 个文件[/]"
+            )
+            for p in files[:12]:
+                console.print(f"  [cw.dim]·[/] [cw.diff.file]{p}[/]")
+            if n > 12:
+                console.print(f"  [cw.dim]· … +{n - 12} more[/]")
+        else:
+            _plain_ok()
+        return
+    if use_rich:
+        console = make_console()
+        console.print("[cw.warn]⚠[/] [cw.value]Revert 部分完成[/]")
+        for p in files[:8]:
+            console.print(f"  [cw.ok]·[/] restored  [cw.diff.file]{p}[/]")
+        failed = report.failed or {}
+        if isinstance(failed, dict):
+            for path, err in list(failed.items())[:8]:
+                console.print(f"  [cw.fail]·[/] failed    [cw.diff.file]{path}[/]: [cw.dim]{err}[/]")
+        else:
+            console.print(f"  [cw.fail]·[/] failed    {failed}")
     else:
-        output_fn(
-            f"Revert 部分失败：{report.target_type} {report.target_id}\n"
-            f"  applied: {', '.join(report.applied) or '—'}\n"
-            f"  failed: {report.failed}"
-        )
+        _plain_partial()
+
 
 
 def _parse_change_target(
@@ -1532,34 +1687,70 @@ def _run_index(agents: AgentService, run) -> int:
     return 0
 
 
+def _clip_prompt(text: str, *, max_len: int = 56) -> str:
+    one = " ".join((text or "").split())
+    if not one:
+        return ""
+    if len(one) <= max_len:
+        return one
+    return one[: max_len - 1] + "…"
+
+
+def _run_user_prompt(agents: AgentService, run) -> str:
+    """取该 Run 对应的用户输入（对话里第一条挂到此 run 的 user 消息）。"""
+    try:
+        msgs = agents.sessions.conversations.list_messages(run.session_id)
+    except Exception:  # noqa: BLE001
+        try:
+            conv = agents.sessions.load_conversation(run.session_id)
+            msgs = conv.messages
+        except Exception:  # noqa: BLE001
+            return ""
+    for msg in msgs:
+        if msg.role != "user":
+            continue
+        if getattr(msg, "agent_run_id", None) == run.agent_run_id:
+            return _clip_prompt(msg.content or "")
+    return ""
+
+
+def _diff_stat_summary(diffs: list, *, limit: int = 3) -> str:
+    """Compact ``M a.py +3 -1 · A b.py +10`` for pickers."""
+    from backend.app.changes.models import ChangeType, FileDiff
+    from backend.app.cli.render_diff import format_file_stat_label
+
+    real = [
+        d
+        for d in diffs
+        if isinstance(d, FileDiff) and d.change_type is not ChangeType.UNCHANGED
+    ]
+    if not real:
+        return "(no file diffs)"
+    parts = [format_file_stat_label(d) for d in real[:limit]]
+    if len(real) > limit:
+        parts.append(f"+{len(real) - limit} more")
+    return " · ".join(parts)
+
+
 def _human_run_label(agents: AgentService, run) -> str:
-    changes = agents.list_run_file_changes(run.agent_run_id)
-    paths = sorted({c.path for c in changes})
+    """Revert/Diff 选 Run：展示用户输入 + 文件 +/-，不堆 id/时间。"""
+    prompt = _run_user_prompt(agents, run)
+    diffs = agents.get_run_file_diffs(run.agent_run_id)
+    stats = _diff_stat_summary(diffs, limit=2)
     idx = _run_index(agents, run)
-    answer = (run.final_answer or "").strip().replace("\n", " ")
-    if len(answer) > 36:
-        answer = answer[:35] + "…"
-    hint = f"  ·  “{answer}”" if answer else ""
-    return (
-        f"Run #{idx}  ·  {len(changes)} file(s): {_path_names(paths)}  ·  "
-        f"{run.status}  ·  {_fmt_clock(run.created_at)}  ·  …{_short_id(run.agent_run_id)}"
-        f"{hint}"
-    )
+    if prompt:
+        return f"Run #{idx}  “{prompt}”  ·  {stats}"
+    return f"Run #{idx}  ·  {stats}"
 
 
 def _human_step_label(agents: AgentService, step_id: str, run) -> str:
+    """选 Step：文件 +/- 为主；顺带短提示所属 Run 的用户输入。"""
     step = agents.sessions.runs.get_step(step_id)
-    changes = agents.list_step_file_changes(step_id)
-    paths = sorted({c.path for c in changes})
-    badges = "".join(sorted({c.change_type.value[0] for c in changes})) or "?"
-    run_idx = _run_index(agents, run)
-    tools = agents.sessions.runs.list_tool_calls(step_id=step_id)
-    tool_names = ", ".join(dict.fromkeys(t.tool_name for t in tools if t.tool_name)) or "write"
-    return (
-        f"Step #{step.step_index}  ·  {tool_names}  ·  "
-        f"{_path_names(paths)} [{badges}]  ·  Run #{run_idx}  ·  "
-        f"{_fmt_clock(step.created_at or run.created_at)}  ·  …{_short_id(step_id)}"
-    )
+    diffs = agents.get_step_file_diffs(step_id)
+    stats = _diff_stat_summary(diffs)
+    prompt = _run_user_prompt(agents, run)
+    run_bit = f"“{_clip_prompt(prompt, max_len=28)}”" if prompt else f"Run #{_run_index(agents, run)}"
+    return f"Step #{step.step_index}  ·  {stats}  ·  {run_bit}"
 
 
 def _latest_run_with_changes(agents: AgentService, session_id: str) -> str | None:

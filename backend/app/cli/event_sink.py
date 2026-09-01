@@ -1,8 +1,9 @@
-"""CLI EventSink：Plan 下只挂一行工具摘要；最终回答真流式后再 MD 定稿。"""
+"""CLI EventSink：Plan Live 与最终回答解耦；Plan 收尾后冻结，回答在确认终稿后再流式。"""
 
 from __future__ import annotations
 
 import sys
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -25,9 +26,11 @@ _QUIET_PROCESS = frozenset(
     }
 )
 
+_ANSWER_HEADER = "✦ Final Answer"
+
 
 class CliEventSink:
-    """订阅 AgentEvent；Plan 写入对话，工具过程默认不打印。"""
+    """订阅 AgentEvent；Plan 写入对话，工具过程默认挂在当前步骤下。"""
 
     def __init__(
         self,
@@ -50,7 +53,9 @@ class CliEventSink:
         self._answer_header_shown = False
         self._answer_buf = ""
         self._draft_rows = 0
-        self._streamed_len = 0  # 已写到屏幕的 buf 前缀长度
+        self._streamed_len = 0
+        # Plan 提前完成但 agent 仍在跑工具时：禁止把推测正文当 Final Answer 刷屏
+        self._hold_answer_until_done = False
         self.events: list[AgentEvent] = []
         self._enable_spinner = enable_spinner
         self._enable_markdown = enable_markdown
@@ -108,7 +113,7 @@ class CliEventSink:
             self._status = None
 
     def _clear_streamed_draft(self) -> None:
-        """只擦最终回答草稿行；绝不 CSI J（行数偏大时会把上方 Plan/历史清掉）。"""
+        """只擦最终回答草稿行；绝不 CSI J。"""
         if not self._interactive or not self.answer_streamed:
             return
         rows = max(1, self._draft_rows)
@@ -121,7 +126,6 @@ class CliEventSink:
         self._draft_rows = 0
 
     def _plan_finished(self) -> bool:
-        """Plan 已收尾 → 之后的 answer_delta 是最终回答，应真流式。"""
         view = self._renderer.plan_view
         if view is None:
             return True
@@ -134,26 +138,38 @@ class CliEventSink:
         return False
 
     def _write_answer_delta(self, delta: str) -> None:
-        """把新增正文写到屏幕（跟 LLM 真流式）。绝不停 Plan。"""
+        """把新增正文写到屏幕。调用前须已 freeze Plan。"""
         if self._capture_answer or not delta:
             return
         if not self._answer_header_shown:
+            self._stream_write_fn("\n")
+            if self._interactive and get_theme().color:
+                self._stream_write_fn(f"\033[1;36m{_ANSWER_HEADER}\033[0m")
+            else:
+                self._stream_write_fn(_ANSWER_HEADER)
             self._stream_write_fn("\n")
             self._answer_header_shown = True
         self._stream_write_fn(delta)
         self._streamed_len = len(self._answer_buf)
         width = terminal_width()
-        self._draft_rows = _visual_rows(self._answer_buf, width)
-        if self._answer_header_shown:
-            self._draft_rows += 1
+        prefix = f"\n{_ANSWER_HEADER}\n" if self._answer_header_shown else ""
+        self._draft_rows = _visual_rows(prefix + self._answer_buf, width)
         self.answer_streamed = True
 
-    def _flush_unstreamed_answer(self) -> None:
-        """把尚未写屏的 buf 尾部补流式写出。"""
+    def _flush_unstreamed_answer(self, *, typewriter: bool = False) -> None:
         if self._capture_answer:
             return
         pending = self._answer_buf[self._streamed_len :]
-        if pending:
+        if not pending:
+            return
+        if typewriter and self._interactive and len(pending) > 1:
+            # 终稿确认后再吐字：避免 Plan 完成后工具轮推测正文抢写/上擦
+            chunk = 2
+            delay = min(0.012, 0.8 / max(len(pending), 1))
+            for i in range(0, len(pending), chunk):
+                self._write_answer_delta(pending[i : i + chunk])
+                time.sleep(delay)
+        else:
             self._write_answer_delta(pending)
 
     def emit(self, event: AgentEvent) -> None:
@@ -163,18 +179,18 @@ class CliEventSink:
         if et in PLAN_EVENT_TYPES:
             self._stop_tool_spinner()
             self._renderer.handle_plan_event(event)
-            # Plan 刚完成：若最终回答已在缓冲，冻结 Plan 后立刻吐已到的字
-            if (
-                et == "plan_completed"
-                and self._answer_buf
-                and not self.answer_streamed
-            ):
+            if et == "plan_completed":
+                # 冻结清单：之后禁止 cursor-up 改写（否则会擦掉下方内容）
                 self._renderer.stop()
-                self._flush_unstreamed_answer()
+                # 不立刻 flush 缓冲正文——可能仍是工具轮推测文字
+                # hold 仅在「完成后又出现工具」时打开，以便纯最终回答仍可真流式
             return
 
         if et in {"tool_called", "tool_completed", "tool_failed"}:
             self._stop_tool_spinner()
+            if self._plan_finished():
+                # Plan 已全绿但 agent 还在干活：推迟 Final Answer，避免推测正文上擦
+                self._hold_answer_until_done = True
             self._renderer.handle_tool_event(event)
             return
 
@@ -183,10 +199,10 @@ class CliEventSink:
             if not delta:
                 return
             self._answer_buf += delta
-            # Plan 未完成：只缓冲（工具轮推测正文不写屏、不停 Plan）
-            # Plan 已完成：先冻结 Plan（禁止再 cursor-up 改写），再真流式吐字
-            # 否则光标已在回答区时 Plan 再上移改写，文字会往上盖住 Plan
-            if self._plan_finished():
+            # Plan 未完成：只缓冲
+            # Plan 已完成但仍可能继续调工具：继续只缓冲（hold），等 agent_completed
+            # 仅当 Plan 已完成且中间没有「完成后又干活」时才真流式
+            if self._plan_finished() and not self._hold_answer_until_done:
                 if not self.answer_streamed:
                     self._renderer.stop()
                 self._write_answer_delta(delta)
@@ -204,23 +220,30 @@ class CliEventSink:
 
         if et == "agent_completed":
             self._stop_tool_spinner()
-            # 回答已在流式：不要再 finalize 往下打一份 Plan
             if not self.answer_streamed:
-                self._renderer.finalize_plan()
+                # Plan 若从未 finalize（已 stop），不要再 cursor-up；仅未冻结时补打
+                if not self._renderer.is_stopped():
+                    self._renderer.finalize_plan()
             self._renderer.stop()
             full = self._answer_buf
             if not full:
+                self._hold_answer_until_done = False
                 return
-            # 补上尚未流式的部分（Plan 在回答中途才标记完成的情况）
             if not self._capture_answer:
-                self._flush_unstreamed_answer()
+                self._flush_unstreamed_answer(
+                    typewriter=bool(self._hold_answer_until_done or not self.answer_streamed)
+                )
             if self._interactive and self._enable_markdown:
                 if self.answer_streamed:
                     if full and not full.endswith("\n"):
                         self._stream_write_fn("\n")
-                        self._draft_rows = (
-                            _visual_rows(full + "\n", terminal_width()) + 1
-                        )
+                        full_for_rows = full + "\n"
+                    else:
+                        full_for_rows = full
+                    prefix = f"\n{_ANSWER_HEADER}\n"
+                    self._draft_rows = _visual_rows(
+                        prefix + full_for_rows, terminal_width()
+                    )
                     self._clear_streamed_draft()
                 render_markdown(full, force_plain=False)
                 self.answer_streamed = True
@@ -237,6 +260,7 @@ class CliEventSink:
             self._answer_buf = ""
             self._answer_header_shown = False
             self._streamed_len = 0
+            self._hold_answer_until_done = False
             return
 
         if et == "permission_requested":

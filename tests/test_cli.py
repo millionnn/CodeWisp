@@ -100,9 +100,9 @@ def test_cli_empty_input_ignored(tmp_path: Path) -> None:
 
     assert code == 0
     assert any("空输入" in line for line in outputs)
-    # 从未对话就退出 → 空 Session 被丢弃
+    # 从未对话就退出 → 空 Session 被丢弃（静默，不刷系统提示）
     assert agents.sessions.list_sessions() == []
-    assert any("已丢弃未使用的空 Session" in line for line in outputs)
+    assert not any("已丢弃未使用的空 Session" in line for line in outputs)
 
 
 def test_cli_eof_exits_cleanly(tmp_path: Path) -> None:
@@ -142,7 +142,8 @@ def test_cli_switch_away_discards_unused_startup_session(tmp_path: Path) -> None
         show_tool_trace=False,
     )
     assert code == 0
-    assert any("已丢弃未使用的空 Session" in line for line in outputs)
+    blob = "\n".join(outputs)
+    assert "已丢弃未使用的空 Session" not in blob
     remaining = agents.sessions.list_sessions()
     assert len(remaining) == 1
     assert remaining[0].session_id == old.session_id
@@ -235,7 +236,8 @@ def test_cli_session_commands_new_use_list_history(tmp_path: Path) -> None:
     )
     assert code == 0
     assert any("已创建 Session" in line for line in outputs)
-    assert any("已切换到 Session" in line for line in outputs)
+    # /use 切换不再刷 Session/Model/Workspace 系统信息
+    assert not any("已切换到 Session" in line for line in outputs)
     assert any("对话" in line and "底层轨迹" in line for line in outputs)
     assert any("ID        :" in line for line in outputs)
     assert EXIT_COMMANDS

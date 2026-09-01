@@ -102,6 +102,9 @@ class CliLiveRenderer:
     def set_show_tool_trace(self, show: bool) -> None:
         self._show_tool_trace = show
 
+    def is_stopped(self) -> bool:
+        return self._stopped
+
     def stop(self) -> None:
         """停止原地改写；当前清单留在滚动区。"""
         self._plan_live = False
@@ -163,7 +166,6 @@ class CliLiveRenderer:
         if et == PLAN_COMPLETED:
             self.plan_view.status = str(meta.get("status") or "completed")
             self.plan_view.completed_banner = True
-            # 完成后仍可保留最后一次工具摘要；无活动时才显示空占位
             for raw in meta.get("steps") or []:
                 if isinstance(raw, dict):
                     self.plan_view.upsert_step(
@@ -174,24 +176,41 @@ class CliLiveRenderer:
                     )
             self.plan_view.activity = self._activity
             self._paint_plan(force=True)
+            # 完成后立刻冻结：禁止后续工具再 cursor-up 擦屏
+            self.stop()
             return
 
     def handle_tool_event(self, event: AgentEvent) -> None:
-        """默认：只更新当前步骤下的一行活动；--trace 才打完整工具日志。"""
+        """当前 in_progress 步骤下只刷新一行工具摘要；Plan 冻结后不再展示。"""
         self._activity = compact_tool_activity(event)
-        if self.plan_view is not None and not self._show_tool_trace:
-            self.plan_view.activity = self._activity
-            self._paint_plan()
-        if not self._show_tool_trace:
+        if self._show_tool_trace:
+            self.stop()
+            self._pending_fail, self._last_step = render_live_event(
+                event,
+                output_fn=self._output_fn,
+                model_id=self._model_id,
+                pending_fail=self._pending_fail,
+                last_step_shown=self._last_step,
+            )
             return
-        self.stop()
-        self._pending_fail, self._last_step = render_live_event(
-            event,
-            output_fn=self._output_fn,
-            model_id=self._model_id,
-            pending_fail=self._pending_fail,
-            last_step_shown=self._last_step,
+
+        if self.plan_view is None or self._stopped:
+            return
+
+        self.plan_view.activity = self._activity
+        active = next(
+            (s for s in self.plan_view.steps if s.status == "in_progress"),
+            None,
         )
+        target = active
+        # complete_plan_step 在 execute 时已推进 Plan：工具行挂在刚完成的那一步
+        if event.tool_name == "complete_plan_step":
+            done = [s for s in self.plan_view.steps if s.status == "completed"]
+            if done:
+                target = max(done, key=lambda s: s.step_index)
+        if target is not None:
+            target.tool_line = self._activity  # 覆盖刷新，不堆多行
+        self._paint_plan()
 
     def _on_plan_created(self, meta: dict[str, Any]) -> None:
         pid = str(meta.get("plan_id") or "")

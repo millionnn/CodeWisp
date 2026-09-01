@@ -31,6 +31,8 @@ class PlanStepView:
     title: str
     status: str
     reason: str | None = None
+    # 本步骤下只挂一行工具摘要（刷新，不堆多行）
+    tool_line: str = ""
 
 
 @dataclass
@@ -150,8 +152,7 @@ def format_plan_panel(
 ) -> str:
     """纯文本 Plan 面板。
 
-    stable_height=True 时行数固定为 2 + n_steps + 1(activity) + 2(footer)，
-    便于原地改写，不会因 activity/完成条伸缩而叠框或吃掉步骤。
+    每个步骤下方最多一行工具摘要（刷新覆盖）；stable_height 时带固定 footer。
     """
     if view is None:
         return "No active plan."
@@ -173,15 +174,7 @@ def format_plan_panel(
 
     sorted_steps = sorted(view.steps, key=lambda s: s.step_index)
     active = next((s for s in sorted_steps if s.status == "in_progress"), None)
-    failed_anchor = next(
-        (
-            s
-            for s in sorted_steps
-            if s.status in {"failed", "blocked"} and s.reason
-        ),
-        None,
-    )
-    activity_attached = False
+    activity_slots = 0
     for step in sorted_steps:
         glyph = STATUS_GLYPH.get(step.status, "○")
         title = " ".join((step.title or "").split())
@@ -193,38 +186,25 @@ def format_plan_panel(
             row = truncate_display(row, width)
         lines.append(row)
 
-        show_under = False
         hint = ""
-        if active is not None and step.step_id == active.step_id:
-            show_under = True
-            hint = (view.activity or "").strip() or "…"
-        elif (
-            active is None
-            and failed_anchor is not None
-            and step.step_id == failed_anchor.step_id
-        ):
-            show_under = True
-            hint = " ".join((failed_anchor.reason or "").split()) or "…"
-        elif (
-            not stable_height
-            and step.reason
-            and step.status in {"failed", "blocked"}
-            and (active is None or step.step_id != getattr(active, "step_id", None))
-        ):
-            show_under = True
+        if step.tool_line.strip():
+            hint = " ".join(step.tool_line.split())
+        elif active is not None and step.step_id == active.step_id:
+            hint = "…"
+        elif step.status in {"failed", "blocked"} and step.reason:
             hint = " ".join(step.reason.split())
 
-        if show_under:
+        if hint:
             act = f"     {hint}"
             if width is not None:
                 act = truncate_display(act, width)
-            elif not stable_height and len(hint) > 72:
+            elif len(hint) > 72:
                 act = f"     {hint[:71]}…"
             lines.append(act)
-            activity_attached = True
+            activity_slots += 1
 
-    if stable_height and not activity_attached:
-        # 无进行中步骤时仍占一行，保持高度不变
+    # Live 稳定高度：若当前没有任何工具行，仍占一行，避免光标行数跳动
+    if stable_height and activity_slots == 0:
         lines.append("     ")
 
     if stable_height:

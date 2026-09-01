@@ -111,7 +111,8 @@ def test_cli_diff_and_revert_flow(tmp_path: Path, monkeypatch) -> None:
             f"/diff step {step_id}",
             f"/diff run {run_id}",
             f"/revert step {step_id}",
-            "y",  # permission allow (non-TTY numbered/yn path)
+            "",  # default: Revert entire · N file(s)
+            "y",  # permission allow
             "/exit",
         ]
     )
@@ -128,17 +129,18 @@ def test_cli_diff_and_revert_flow(tmp_path: Path, monkeypatch) -> None:
     blob = "\n".join(outputs)
     assert "calc.py" in blob
     assert "return a + b" in blob or "+return a + b" in blob
-    assert "Revert 完成" in blob or "已恢复文件" in blob
+    assert "Revert 完成" in blob or "已恢复" in blob
     assert (ws / "calc.py").read_text(encoding="utf-8") == "return a - b\n"
-    # 可读标签不应以超长 step_/run_ 全文为主
+    # 可读标签：用户任务 + 文件 +/-
     step_label = _human_step_label(agents, step_id, result.run)
     assert "Step #" in step_label
     assert "calc.py" in step_label
-    assert step_id not in step_label  # 只保留短尾缀
-    assert "…" in step_label
+    assert "+" in step_label and "-" in step_label
+    assert step_id not in step_label
     run_label = _human_run_label(agents, result.run)
     assert "Run #" in run_label
-    assert "calc.py" in run_label
+    assert "calc.py" in run_label or "fix add" in run_label
+    assert "+" in run_label or "fix add" in run_label
     reset_theme_cache()
 
 

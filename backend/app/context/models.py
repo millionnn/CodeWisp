@@ -361,6 +361,9 @@ class Plan:
             "## Plan",
             f"Goal: {self.goal}",
             f"Status: {self.status.value}",
+            "Rules: Work ONLY on the [>] step. When that step is done, call tool "
+            "complete_plan_step before starting the next. If a step needs no tools, "
+            "still call complete_plan_step after you finish it.",
         ]
         for step in sorted(self.steps, key=lambda s: s.step_index):
             mark = {

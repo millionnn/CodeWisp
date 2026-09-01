@@ -22,6 +22,7 @@ from backend.app.tools.builtin.lsp import (
     create_lsp_references_tool,
     create_lsp_symbols_tool,
 )
+from backend.app.tools.builtin.plan_step import create_complete_plan_step_tool
 from backend.app.tools.builtin.time import GetCurrentTimeTool
 from backend.app.tools.builtin.workspace import (
     EditFileTool,
@@ -49,6 +50,7 @@ def create_default_registry(
     on_permission_resolved: object | None = None,
     on_command_line: object | None = None,
     lsp_service: object | None = None,
+    plan_complete_fn: object | None = None,
 ) -> ToolRegistry:
     """创建并注册内置工具（只读 / 写入 / 受控执行）。
 
@@ -106,6 +108,10 @@ def create_default_registry(
     registry.register(create_lsp_references_tool(ws, **lsp_kwargs))  # type: ignore[arg-type]
     registry.register(create_lsp_symbols_tool(ws, **lsp_kwargs))  # type: ignore[arg-type]
     registry.register(create_lsp_hover_tool(ws, **lsp_kwargs))  # type: ignore[arg-type]
+
+    registry.register(
+        create_complete_plan_step_tool(complete_fn=plan_complete_fn)  # type: ignore[arg-type]
+    )
 
     return registry
 

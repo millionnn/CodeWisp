@@ -26,6 +26,8 @@ CODEWISP_THEME = Theme(
         "cw.value": "white",
         "cw.cmd": "bold white",
         "cw.step": "dim",
+        "cw.plan": "bold cyan",
+        "cw.tool": "dim cyan",
         "cw.diff.file": "bold white",
         "cw.diff.add": "green",
         "cw.diff.del": "red",

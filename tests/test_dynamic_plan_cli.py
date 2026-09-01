@@ -345,6 +345,7 @@ def test_compact_tool_activity_line() -> None:
 
 
 def test_plan_advances_on_explore_then_edit(tmp_path: Path) -> None:
+    """逐步模型：普通工具不跳步；complete_plan_step 才推进。"""
     from backend.app.tools.result import ToolResult
 
     store = SqliteStore(tmp_path / "adv.db")
@@ -363,9 +364,7 @@ def test_plan_advances_on_explore_then_edit(tmp_path: Path) -> None:
     )
     cm.begin_run("阅读代码并修复问题然后验证", agent_run_id=None)
     assert cm.plan is not None
-    titles = [s.title for s in sorted(cm.plan.steps, key=lambda s: s.step_index)]
-    assert titles
-    # 探索
+    # 读文件：仍停在第 1 步
     cm.update_after_tool(
         tool_name="read_file",
         tool_call_id="c1",
@@ -373,11 +372,9 @@ def test_plan_advances_on_explore_then_edit(tmp_path: Path) -> None:
         result=ToolResult(success=True, output={"line_count": 10}),
         observation="ok",
     )
-    types = [e.event_type for e in recorded.events]
-    assert PLAN_STEP_COMPLETED in types
-    in_prog = [s for s in cm.plan.steps if s.status == PlanStepStatus.IN_PROGRESS]
-    assert len(in_prog) == 1
-    # 修改
+    assert cm.plan.steps[0].status == PlanStepStatus.IN_PROGRESS
+    assert PLAN_STEP_COMPLETED not in [e.event_type for e in recorded.events]
+    # 改文件：也不自动跳步
     cm.update_after_tool(
         tool_name="edit_file",
         tool_call_id="c2",
@@ -385,14 +382,21 @@ def test_plan_advances_on_explore_then_edit(tmp_path: Path) -> None:
         result=ToolResult(success=True, output={"replacements": 1}),
         observation="edited",
     )
-    completed = [s for s in cm.plan.steps if s.status == PlanStepStatus.COMPLETED]
-    assert len(completed) >= 2
+    assert cm.plan.steps[0].status == PlanStepStatus.IN_PROGRESS
+    # 显式完成信号
+    out = cm.complete_current_step(note="explored and fixed")
+    assert out["ok"] is True
+    assert cm.plan.steps[0].status == PlanStepStatus.COMPLETED
+    assert any(e.event_type == PLAN_STEP_COMPLETED for e in recorded.events)
+    in_prog = [s for s in cm.plan.steps if s.status == PlanStepStatus.IN_PROGRESS]
+    assert len(in_prog) == 1
     cm.update_after_assistant("任务完成，测试通过。")
     assert cm.plan.status.value == "completed"
     assert any(e.event_type == PLAN_COMPLETED for e in recorded.events)
 
 
 def test_plan_advances_design_step_on_read(tmp_path: Path) -> None:
+    """设计步也不会因 read 自动完成；需 complete_plan_step。"""
     from backend.app.tools.result import ToolResult
 
     store = SqliteStore(tmp_path / "des.db")
@@ -409,7 +413,6 @@ def test_plan_advances_design_step_on_read(tmp_path: Path) -> None:
     )
     cm.begin_run("设计预算统计方案并实现", agent_run_id=None)
     assert cm.plan is not None
-    # 强制当前步为「设计…」
     for s in cm.plan.steps:
         s.status = PlanStepStatus.PENDING
     cm.plan.steps[0].title = "设计预算统计字段扩展方案"
@@ -421,6 +424,9 @@ def test_plan_advances_design_step_on_read(tmp_path: Path) -> None:
         result=ToolResult(success=True, output={"line_count": 1}),
         observation="ok",
     )
+    assert cm.plan.steps[0].status == PlanStepStatus.IN_PROGRESS
+    out = cm.complete_current_step(note="design done")
+    assert out["ok"] is True
     assert cm.plan.steps[0].status == PlanStepStatus.COMPLETED
 
 
@@ -484,16 +490,22 @@ def test_format_plan_stable_height() -> None:
     )
     plan.steps[0].status = PlanStepStatus.IN_PROGRESS
     view = plan_from_domain(plan)
-    view.activity = ""
     a = format_plan_panel(view, stable_height=True).split("\n")
-    view.activity = "◇ read_file x.py"
+    assert any("…" in line for line in a)
+    view.steps[0].tool_line = "◇ read_file x.py"
     b = format_plan_panel(view, stable_height=True).split("\n")
+    # 仍只有一行工具（刷新），高度与占位时一致
     assert len(a) == len(b)
+    assert sum(1 for line in b if "read_file" in line) == 1
     plan.steps[0].status = PlanStepStatus.COMPLETED
     plan.steps[1].status = PlanStepStatus.IN_PROGRESS
     view = plan_from_domain(plan)
+    view.steps[0].tool_line = "✓ read_file x.py"
+    view.steps[1].tool_line = "◇ edit_file y.py"
     c = format_plan_panel(view, stable_height=True).split("\n")
-    assert len(c) == len(a)
+    assert "✓ 1. A" in "\n".join(c)
+    assert "● 2. B" in "\n".join(c)
+    assert "edit_file" in "\n".join(c)
 
 
 def test_tool_activity_survives_step_transition() -> None:

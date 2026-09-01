@@ -448,7 +448,7 @@ class DefaultContextManager:
                 note = f"编辑 {paths[0]}"
                 if note not in self.task.completed_items:
                     self.task.completed_items.append(note)
-                self._advance_plan_on_edit()
+                # Plan 推进只允许 complete_plan_step / 最终回答，不再按工具类型猜测
             self.refresh_lsp_context(focus_path=paths[0])
         elif name == "read_file" and paths:
             for p in paths:
@@ -456,14 +456,12 @@ class DefaultContextManager:
                     ws.active_files.append(p)
                 if p not in ws.important_files and len(ws.important_files) < 30:
                     ws.important_files.append(p)
-            self._advance_plan_on_explore()
         elif name in {"search_code", "list_files"}:
             if name == "list_files":
                 hint = summarize_test_observation(observation, max_len=120)
                 if hint and hint not in ws.workspace_structure:
                     ws.workspace_structure.append(hint)
                     ws.workspace_structure = ws.workspace_structure[-15:]
-            self._advance_plan_on_explore()
         elif name == "run_command":
             failed = (not result.success) or looks_like_test_failure(observation)
             summary = summarize_test_observation(observation)
@@ -487,7 +485,9 @@ class DefaultContextManager:
                         done = f"验证通过: {summary[:120]}"
                         if done not in self.task.completed_items:
                             self.task.completed_items.append(done)
-                        self._advance_plan_on_verify(success=True)
+        elif name == "complete_plan_step":
+            # 完成动作在工具 execute 里已调用 complete_current_step；此处不再重复
+            pass
         elif name.startswith("git_"):
             self.refresh_git_context()
         elif name.startswith("lsp_"):
@@ -806,94 +806,33 @@ class DefaultContextManager:
                 return step
         return None
 
-    def _advance_current_if_title_matches(self, keywords: tuple[str, ...]) -> bool:
+    def complete_current_step(self, *, note: str = "") -> dict:
+        """显式完成当前 Plan 条目，并激活下一条（用户期望的逐步信号）。"""
+        self.ensure_loaded()
+        if not self.plan or self.plan.status == PlanStatus.COMPLETED:
+            return {"ok": False, "error": "no active plan"}
         step = self._current_in_progress_step()
         if step is None:
-            return False
-        title_l = step.title.lower()
-        if not any(k in title_l for k in keywords):
-            return False
-        self._set_step_status(step, PlanStepStatus.COMPLETED)
+            return {"ok": False, "error": "no in_progress plan step"}
+        reason = note.strip() or None
+        self._set_step_status(step, PlanStepStatus.COMPLETED, reason=reason)
+        if self.task:
+            done = f"完成步骤: {step.title}"
+            if done not in self.task.completed_items:
+                self.task.completed_items.append(done)
+            self.task.touch()
+            self._save_task()
         self._activate_next_plan_step()
         self._save_plan()
-        return True
-
-    def _advance_plan_on_explore(self) -> None:
-        """探索类工具：完成当前 inspect/read/设计 步骤。"""
-        self._advance_current_if_title_matches(
-            (
-                "探索",
-                "阅读",
-                "查看",
-                "定位",
-                "审查",
-                "设计",
-                "方案",
-                "分析",
-                "了解",
-                "inspect",
-                "explore",
-                "read",
-                "locate",
-                "find",
-                "identify",
-                "design",
-                "review",
-            )
-        )
-
-    def _advance_plan_on_edit(self) -> None:
-        if not self.plan:
-            return
-        if self._advance_current_if_title_matches(
-            (
-                "修改",
-                "修复",
-                "edit",
-                "fix",
-                "实现",
-                "implement",
-                "apply",
-                "写入",
-                "添加",
-                "增加",
-                "更新",
-                "扩展",
-                "编写",
-                "enrich",
-                "update",
-                "add",
-                "extend",
-                "write",
-            )
-        ):
-            return
-        step = self._current_in_progress_step()
-        if step is None:
-            return
-        title_l = step.title.lower()
-        # 验证类步骤留给 run_command；其余当前步在真正改文件后视为完成
-        if any(k in title_l for k in ("测试", "验证", "test", "verify", "pytest")):
-            return
-        self._set_step_status(step, PlanStepStatus.COMPLETED)
-        self._activate_next_plan_step()
-        self._save_plan()
-
-    def _advance_plan_on_verify(self, *, success: bool) -> None:
-        if not self.plan or not success:
-            return
-        # 验证成功：尽量把当前及后续验证步收掉；若卡在实现步也允许收尾推进
-        if self._advance_current_if_title_matches(
-            ("测试", "验证", "test", "verify", "pytest", "检查", "文档")
-        ):
-            return
-        # 已有测试通过但当前标题不像验证：仍完成当前非空步，避免 UI 停在中途
-        step = self._current_in_progress_step()
-        if step is None:
-            return
-        self._set_step_status(step, PlanStepStatus.COMPLETED)
-        self._activate_next_plan_step()
-        self._save_plan()
+        nxt = self._current_in_progress_step()
+        return {
+            "ok": True,
+            "completed_step_index": step.step_index,
+            "completed_step": step.title,
+            "next_step_index": nxt.step_index if nxt else None,
+            "next_step": nxt.title if nxt else None,
+            "plan_completed": self.plan.status == PlanStatus.COMPLETED,
+        }
 
     def _complete_remaining_plan_steps(self) -> None:
         """最终回答时收尾：未完成步骤标 completed，发 plan_completed。"""

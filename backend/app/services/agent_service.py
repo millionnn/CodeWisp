@@ -812,6 +812,7 @@ class AgentService:
             on_permission_resolved=on_permission_resolved if handler else None,
             on_command_line=on_command_line,
             lsp_service=LSPService(workspace, manager=self._lsp_manager),
+            plan_complete_fn=context_manager.complete_current_step,
         )
         executor = ToolExecutor(registry)
         loop = AgentLoop(
