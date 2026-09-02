@@ -1,192 +1,488 @@
 # CodeWisp
 
-## Git 仓库地址
+> **A CLI-first autonomous coding agent built from scratch for real software engineering tasks.**
 
-https://github.com/millionnn/CodeWisp.git
+CodeWisp 是一个从零实现的自主编程智能体（Coding Agent）。它通过大语言模型驱动本地工具，在真实代码仓库中完成**代码理解、任务规划、代码修改、命令执行、测试验证、自主纠错、代码诊断与版本管理**。
 
-## 如何运行
+CodeWisp 不依赖 LangChain、LlamaIndex、AutoGen、CrewAI 等 Agent 框架，而是自行实现 Agent Runtime、Tool System、Context Management、Permission、Persistence、Snapshot、Git 与 LSP 等核心能力。
 
-环境要求：Python 3.11+；DeepSeek / 硅基流动等 **OpenAI 兼容** API Key。
+核心工作闭环：
 
-### 一次性安装（推荐）
+```text
+User Task
+   │
+   ▼
+Context / Plan
+   │
+   ▼
+LLM Reasoning
+   │
+   ▼
+Tool Execution
+   │
+   ├── Read / Search
+   ├── Edit / Write
+   ├── Run Command
+   ├── LSP Diagnostics
+   └── Git
+   │
+   ▼
+Observation
+   │
+   ▼
+Self-Correction
+   │
+   ▼
+Verification
+   │
+   ▼
+Diff / Revert / Commit
+```
+
+---
+
+## ✨ Features
+
+### 🤖 Autonomous Coding
+
+CodeWisp 支持多轮 **LLM → Tool → Observation** 执行循环。
+
+Agent 可以自主：
+
+* 理解用户编程任务
+* 浏览和搜索代码
+* 读取项目文件
+* 修改代码
+* 创建文件
+* 执行测试和命令
+* 根据执行结果继续推理
+* 修复之前产生的问题
+
+因此它不是一次性的代码生成器，而是一个能够持续执行任务的 Coding Agent。
+
+---
+
+### 🔄 Self-Correction
+
+CodeWisp 将工具执行结果重新反馈给 Agent。
+
+例如：
+
+```text
+修改代码
+   ↓
+运行测试
+   ↓
+测试失败
+   ↓
+分析错误
+   ↓
+定位相关代码
+   ↓
+再次修改
+   ↓
+重新测试
+   ↓
+测试通过
+```
+
+Agent 不需要预先写死具体的修复路径，而是根据测试结果和环境反馈动态决定下一步行动。
+
+---
+
+### 🧠 Context / Plan / Memory
+
+CodeWisp 提供分层 Context 管理机制，将不同来源的信息按照任务相关性组织：
+
+```text
+System Instructions
+       ↓
+Project Rules
+       ↓
+Task / Plan
+       ↓
+Memory
+       ↓
+Retrieved Code
+       ↓
+Workspace State
+       ↓
+Recent Messages
+       ↓
+Tool Observations
+```
+
+同时支持：
+
+* Project Rules
+* Task State
+* Plan / Plan Steps
+* Memory
+* Context Budget
+* Context Compression
+* Workspace Context
+* Conversation Persistence
+
+Agent 可以在有限上下文预算下优先保留与当前任务相关的信息。
+
+---
+
+### 🔐 Permission System
+
+CodeWisp 将 Agent 操作划分为三级权限：
+
+```text
+ALLOW ──► 直接执行
+ASK   ──► 请求用户确认
+DENY  ──► 阻止执行
+```
+
+例如：
+
+* 读取文件：ALLOW
+* 普通测试命令：ALLOW
+* 修改代码：根据策略处理
+* Git Commit：ASK
+* 危险 Git 操作：DENY
+
+权限判断与具体交互 Handler 解耦，因此 CLI、API 等不同运行环境可以使用不同的权限处理方式。
+
+---
+
+### 📸 Snapshot / Diff / Revert
+
+CodeWisp 不依赖 Git 来追踪 Agent 的修改，而是维护独立的 Workspace Change Management。
+
+可以记录：
+
+```text
+Run
+ ├── Step 1
+ │    └── file changes
+ ├── Step 2
+ │    └── file changes
+ └── Step 3
+      └── file changes
+```
+
+支持：
+
+* Snapshot
+* File Diff
+* Step-level Change Tracking
+* Run-level Change Tracking
+* Revert
+
+因此即使 Agent 连续修改多个文件，也可以将一次完整任务产生的修改整体回滚。
+
+---
+
+### 🌿 Git-Aware Workflow
+
+CodeWisp 提供独立的 Git Domain Service 与 Git Tools。
+
+Agent 可以感知：
+
+* Repository Root
+* Current Branch
+* Working Tree Status
+* Modified / Staged / Untracked Files
+* Recent Commits
+* Ahead / Behind Status
+
+支持：
+
+```text
+/git status
+/git diff
+/git log
+/git branch
+/git commit
+```
+
+Commit 不会被 Agent 静默执行，而是先生成 **Commit Preview**，再经过 Permission Handler 请求用户确认。
+
+---
+
+### 🧩 LSP-Aware Coding Intelligence
+
+CodeWisp 将 LSP 能力作为 Coding Agent 的代码智能层。
+
+当前支持：
+
+* Diagnostics
+* Symbols
+* Definition
+* References
+* Hover
+* Language / Server Status
+
+其中 Diagnostics 可以直接进入 Agent 的上下文：
+
+```text
+Code Modification
+       ↓
+LSP Diagnostics
+       ↓
+Agent observes errors
+       ↓
+Reasoning
+       ↓
+Code Repair
+       ↓
+Diagnostics again
+```
+
+当前以 Python + Pyright 为主要实践，并在 LSP 不可用时进行 graceful degradation。
+
+---
+
+## 🏗️ Architecture
+
+CodeWisp 采用模块化分层设计。
+
+```text
+┌─────────────────────────────────────────┐
+│                  CLI                    │
+└───────────────────┬─────────────────────┘
+                    │
+┌───────────────────▼─────────────────────┐
+│              AgentService               │
+│        Session / Run / Workspace        │
+└───────────────────┬─────────────────────┘
+                    │
+┌───────────────────▼─────────────────────┐
+│               Agent Core                │
+│                                         │
+│  Context → Plan → AgentLoop → Events   │
+└───────────┬───────────────┬─────────────┘
+            │               │
+     ┌──────▼──────┐ ┌──────▼──────────┐
+     │ Tool System │ │ Permission      │
+     │ Registry    │ │ Policy/Handler  │
+     │ Executor    │ └─────────────────┘
+     └──────┬──────┘
+            │
+   ┌────────┼────────┬────────┬─────────┐
+   ▼        ▼        ▼        ▼         ▼
+ File     Shell     LSP      Git      Change
+ Tools    Tools     Tools    Tools    Tracking
+                                     
+┌─────────────────────────────────────────┐
+│              Persistence                │
+│       SQLite / Session / Run / Step     │
+└─────────────────────────────────────────┘
+```
+
+核心设计原则：
+
+* **AgentLoop 负责 Agent 决策循环，不负责业务持久化**
+* **Tool 通过 Registry / Executor 统一管理**
+* **Permission 与 Tool Execution 解耦**
+* **Git、LSP、Snapshot 等能力作为独立 Domain Service**
+* **CLI 与 FastAPI 共用 AgentService 和 Agent Core**
+* **Conversation History 与 Workspace History 分离**
+* **外部能力不可用时尽可能 graceful degradation**
+
+---
+
+## 🧱 Core Modules
+
+```text
+backend/app/
+├── agent/          # Agent Loop / State / Events
+├── tools/          # Tool / Registry / Executor
+├── llm/            # LLM Client / Messages / Responses
+├── context/        # Context / Plan / Memory
+├── session/        # Session / Conversation
+├── persistence/    # SQLite / Repository / Migration
+├── permission/     # Permission Policy / Handler
+├── changes/        # Snapshot / Diff / Revert
+├── git/            # Git Domain Service / Git Tools
+├── lsp/            # LSP Adapter / Diagnostics / Symbols
+├── api/            # FastAPI Backend
+└── cli/            # CLI Interface
+```
+
+---
+
+## 🚀 Quick Start
+
+### 1. Clone
 
 ```bash
 git clone https://github.com/millionnn/CodeWisp.git
 cd CodeWisp
+```
+
+### 2. Create Environment
+
+```bash
 python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate
+```
+
+### 3. Install
+
+```bash
 pip install -e ".[dev]"
+```
+
+### 4. Configure LLM
+
+```bash
 cp .env.example .env
 ```
 
-编辑 `.env`。若使用**硅基流动 + Qwen**：
+编辑 `.env`：
 
-```
-LLM_API_KEY=你的硅基流动密钥
-LLM_BASE_URL=https://api.siliconflow.cn/v1
-LLM_MODEL=Qwen/Qwen3.5-4B
+```env
+LLM_API_KEY=your_api_key
+LLM_BASE_URL=your_base_url
+LLM_MODEL=your_model
 ```
 
-启动后可用：
+### 5. Start CodeWisp
+
+进入任意需要修改的代码仓库：
 
 ```bash
-codewisp --provider-id siliconflow --model-id Qwen/Qwen3.5-4B
-# 或进入后：/model siliconflow Qwen/Qwen3.5-4B
-```
-
-也可单独配置 `SILICONFLOW_API_KEY`（可选 `SILICONFLOW_BASE_URL`），与 DeepSeek 的 `LLM_*` 并存。
-
-DeepSeek 示例：
-
-```
-LLM_API_KEY=你的密钥
-LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-chat
-```
-
-也可把同一份配置放到 `~/.codewisp/.env`，这样不依赖当前目录。
-
-### 日常用法：任意项目目录直接启动
-
-一次性把 CLI 挂到用户 PATH（之后**不必**再 `source` venv）：
-
-```bash
-cd /Users/wangyiran/Desktop/CodeWisp   # 或你的 CodeWisp 克隆路径
-./scripts/install_cli.sh
-source ~/.zshrc
-```
-
-然后在**任意**需要 Agent 的项目里：
-
-```bash
-cd /path/to/your-project
+cd /path/to/your/project
 codewisp
 ```
 
-Workspace 默认 = 当前目录。API：
+启动后可以使用：
 
-```bash
-codewisp-api
+```text
+/help
+/model
+/context
+/plan
+/diff
+/revert
+/git
+/lsp
 ```
 
-常用可选参数：
+---
 
-```bash
-codewisp --title "My Session" --max-steps 40
-codewisp --session ses_xxx          # 续跑已有 Session
-codewisp -w /other/project          # 显式指定 Workspace（覆盖 cwd）
-codewisp --db ~/.codewisp/demo.db   # 可选：指定 SQLite 路径
+## 🧪 Example
+
+例如给 CodeWisp 一个真实的代码修复任务：
+
+```text
+Fix the failing tests in this project.
+Do not modify the tests.
 ```
 
-CLI 命令：`/help` `/sessions` `/session` `/new` `/use` `/history` `/providers` `/models` `/model` `/status` `/git` `/lsp` `/mcp` `/delete` `/exit`。
-普通输入经 **AgentService → ModelResolver → AgentLoop** 执行并持久化；工具轨迹实时展示；最终回答 **流式纯文本 + 结束后 Markdown 重绘**（Rich）；ASK 经 **CliPermissionHandler**。
+Agent 可以自主完成：
 
-### MCP（V1.3）
-
-在目标仓库放置 `.codewisp/mcp.json`：
-
-```json
-{
-  "mcpServers": {
-    "demo": {
-      "command": "python3",
-      "args": ["-m", "backend.app.mcp.demo_server"],
-      "enabled": true
-    }
-  }
-}
+```text
+Inspect project
+      ↓
+Understand failing tests
+      ↓
+Locate relevant implementation
+      ↓
+Edit source files
+      ↓
+Run tests
+      ↓
+Observe failure
+      ↓
+Analyze the new failure
+      ↓
+Perform another repair
+      ↓
+Run tests again
+      ↓
+LSP diagnostics
+      ↓
+Show diff
 ```
 
-然后：
+最终用户可以通过：
 
-```bash
-codewisp
-/mcp reload
-/mcp tools
+```text
+/diff
 ```
 
-Agent 会把 MCP 工具注册为 `mcp.<server>.<tool>`（与内置工具一样走 Permission / Trace）。离线 Demo：
+检查 Agent 修改的代码，并通过：
 
-```bash
-codewisp-demo-mcp
+```text
+/revert
 ```
 
-可选环境变量：`NO_COLOR=1` 关闭颜色；`CODEWISP_THEME=mono` 强制纯文本。
+回滚本次任务产生的修改。
 
-Workspace 解析优先级：`--workspace` / `-w` > `CODEWISP_WORKSPACE` > **cwd**。  
-注意：Workspace 是 Agent 要操作的项目，不是 CodeWisp 源码目录。
+如果需要提交代码：
 
-开发调试仍可用：`cd CodeWisp && source .venv/bin/activate && python -m backend.app`。
-
-### Backend API
-
-```bash
-codewisp-api
-# 默认 http://127.0.0.1:8000 ；文档 /docs
+```text
+/git status
+/git diff
+/git commit
 ```
 
-主要接口：
+Commit 前 CodeWisp 会展示 Commit Preview 并请求用户确认。
 
-```http
-POST   /api/sessions
-GET    /api/sessions
-GET    /api/sessions/{id}
-PATCH  /api/sessions/{id}
-DELETE /api/sessions/{id}
-GET    /api/sessions/{id}/messages
-POST   /api/sessions/{id}/messages
-GET    /api/sessions/{id}/permissions/pending
-POST   /api/sessions/{id}/permissions/decide
-GET    /api/providers
-GET    /api/models?provider_id=
+---
+
+## 📊 Testing
+
+CodeWisp 持续采用单元测试与回归测试验证核心模块，包括：
+
+* Agent Loop
+* Tool System
+* Session
+* Persistence
+* Permission
+* Context
+* Snapshot / Diff / Revert
+* Git
+* LSP
+* API
+
+当前项目已完成 V0.1–V1.2 的持续迭代。
+
+---
+
+## 🛣️ Development Roadmap
+
+```text
+V0.1  Agent CLI
+  ↓
+V0.2  Tool System
+  ↓
+V0.3  Agent Loop
+  ↓
+V0.4  Coding Tools
+  ↓
+V0.5  Self-Correction
+  ↓
+V0.6  Session & Backend
+  ↓
+V0.7  Provider / Model
+  ↓
+V0.8  Permission & Live Runtime
+  ↓
+V0.9  Snapshot / Diff / Revert
+  ↓
+V1.0  Context / Plan / Memory
+  ↓
+V1.1  Git-Aware Workflow
+  ↓
+V1.2  LSP-Aware Coding Intelligence
 ```
 
-示例任务：
+---
 
-- `计算 123 * 456`
-- `查看项目结构，找到 AgentLoop 相关代码并简要说明`
-- `运行这个项目的测试，并告诉我结果`
-- `修复这个项目的测试失败，并运行测试验证`
+## 🎯 Design Goal
 
-运行自动化测试：
+CodeWisp 的目标不是简单地让 LLM “生成更多代码”，而是让模型真正进入软件工程执行环境：
 
-```bash
-pytest
-```
+> **Understand → Plan → Act → Observe → Repair → Verify → Review**
 
-## 特色功能说明
+通过自主实现 Agent Runtime、Tool Execution、Context Management、Permission、Change Tracking、Git 和 LSP 等基础设施，CodeWisp 尝试构建一个能够在真实代码仓库中**执行任务、处理失败、验证结果并管理代码变更**的 Coding Agent。
 
-CodeWisp 是从零实现的编程智能体（Coding Agent）：面向自然语言编程任务，目标能力包括探索代码仓库、读写与修改代码、执行本地命令与测试，并根据结果迭代修复。实现上不封装 Claude Code / Codex 等现成产品，也不使用 LangChain、LlamaIndex、OpenAI Agents SDK、Claude Agent SDK、AutoGen、CrewAI 等 Agent 框架；对话历史、工具定义与本地执行、模型输出解析、循环终止与错误处理等关键逻辑自行编写。模型侧使用厂商官方或 OpenAI 兼容 API（当前默认对接 DeepSeek），凭据仅通过环境变量 / 未入库配置提供。
+---
 
-### 当前能力（V1.0+）
-
-- **Coding Tools：** `list_files` / `glob` / `read_file` / `search_code` / `edit_file` / `write_file`
-- **受控执行：** `run_command`（Policy ALLOW / ASK / DENY）
-- **Interactive Permission + Live EventSink + Streaming**
-- **Session + SQLite：** Conversation / Run / Step / ToolCall / Snapshot；进程重启可恢复
-- **Provider / Model Registry + CLI Model UX**
-- **Workspace Snapshot / Diff / Revert**（`/diff` `/revert`）
-- **Hierarchical Context：** Task / Plan / Memory / Checkpoint / Budget / Compaction（`/context` `/plan`）
-- **Semantic Memory：** 本地 embedding 索引 + hybrid 检索（`/memory search|index|rebuild|stats`）
-- **LLM Planner（旁路）：** `/plan refresh`；Loop 内启发式 replan，不改 Workspace
-- **Git-Aware Workflow：** `/git` + `git_*` tools（与 Snapshot 正交）
-- **LSP Code Intelligence：** `/lsp` + `lsp_*` tools（Pyright；不可用则降级）
-- **MCP Tool Extension：** `/mcp` + `mcp.<server>.<tool>`（stdio；动态发现；统一 Permission）
-- **Backend API + CLI** 共用 `AgentService`
-
-### 当前不支持
-
-完整 Web UI、MCP Resource/Prompt/OAuth 全功能、Multi-Agent、外部云端 Vector DB、复杂 Reranker。
-
-可选：单独验证工具系统（无需 API Key）：
-
-```bash
-python -m backend.app.tools list
-python -m backend.app.tools run list_files '{"path":".","max_depth":1}'
-```
-
-## 其它说明
-
-- API Key 等凭据不得出现在仓库、README、Session 表或演示视频中。
-- 开发过程文档见 `docs/`（架构说明、开发日志）。
-- 鼓励使用 AI 辅助开发，但设计决策由作者负责，面试将围绕「为何这样运转」进行答辩。
