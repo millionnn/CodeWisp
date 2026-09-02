@@ -33,9 +33,12 @@ DEFAULT_AGENT_SYSTEM_PROMPT = (
     "请根据当前提供的 tools 完成用户任务："
     "需要外部信息或仓库操作时调用相应工具，并依据工具返回的结果（Observation）决定下一步——"
     "可以继续调用工具，或在任务已完成后给出最终回答。"
-    "若上下文中有 Plan：只做当前标记为进行中的那一步；"
-    "该步目标达成后必须调用 complete_plan_step，再开始下一步；"
-    "不要在未调用 complete_plan_step 的情况下跳步。"
+    "若上下文中有 Plan：严格逐步执行——"
+    "只做当前标记为 [>] / in_progress 的那一步；"
+    "在该步内依次调用所需工具（可多个）；"
+    "该步目标达成后调用一次 complete_plan_step 发信号，再开始下一步；"
+    "每轮 LLM 回复最多调用一次 complete_plan_step，禁止在同一轮连跳多步；"
+    "不要在未调用 complete_plan_step 的情况下跳步，也不要在 Plan 未全部逐步完成前给出最终回答。"
     "若你修改了代码或配置，应通过合适的检查或命令验证结果；验证已通过则停止，不要无意义地重复同一操作。"
     "若工具返回 permission_required（尚无交互授权通道），请停止自动继续并说明原因。"
     "若工具返回用户拒绝执行（user_denied / DENY），请根据 Observation 调整计划或向用户说明，"
@@ -44,6 +47,12 @@ DEFAULT_AGENT_SYSTEM_PROMPT = (
     "删除文件应使用 run_command 的 rm，并等待用户授权；不要寻找变通执行路径。"
     "不要声称使用了未提供的能力，也不要虚构未实际调用的工具结果。"
     "可用步数有限，请高效完成任务。"
+)
+
+_PLAN_CONTINUE_NUDGE = (
+    "【系统】Plan 尚未逐步完成。请只执行当前 [>] 步骤："
+    "调用该步所需工具，完成后调用 complete_plan_step，再进入下一步。"
+    "全部步骤完成后才能给出最终回答。"
 )
 
 
@@ -109,6 +118,10 @@ class AgentLoop:
         try:
             for step in range(1, self.max_steps + 1):
                 state.step = step
+                if self.context_manager is not None and hasattr(
+                    self.context_manager, "begin_agent_turn"
+                ):
+                    self.context_manager.begin_agent_turn()
                 self._emit_event(
                     state,
                     "llm_started",
@@ -128,6 +141,14 @@ class AgentLoop:
 
                 if not response.has_tool_calls:
                     answer = response.text
+                    if (
+                        self.context_manager is not None
+                        and hasattr(self.context_manager, "plan_has_open_steps")
+                        and self.context_manager.plan_has_open_steps()
+                    ):
+                        conv.add_assistant(answer or "（试图提前结束）")
+                        conv.add_user(_PLAN_CONTINUE_NUDGE)
+                        continue
                     conv.add_assistant(answer)
                     if self.context_manager is not None:
                         self.context_manager.update_after_assistant(answer)

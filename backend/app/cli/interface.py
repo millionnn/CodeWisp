@@ -52,6 +52,15 @@ EXIT_COMMANDS = frozenset({"/exit", "/quit", "exit", "quit"})
 DELETE_COMMANDS = frozenset({"/delete", "/rm"})
 
 
+def _sync_footer_context(
+    agents: AgentService,
+    session_id: str,
+    status_bar: StatusBarState,
+) -> None:
+    used, budget = agents.get_session_token_footer(session_id)
+    status_bar.update_context(used=used, budget=budget)
+
+
 def print_banner(
     *,
     workspace_root: Path | None = None,  # noqa: ARG001 — 保留签名兼容
@@ -215,14 +224,7 @@ def run_cli(
     status_bar = StatusBarState()
     status_bar.update_workspace(workspace_root)
     status_bar.update_from_session(current)
-    try:
-        _ctx0 = agents.get_context_status(current.session_id)
-        status_bar.update_context(
-            used=_ctx0.total_tokens,
-            budget=int(_ctx0.budget.get("usable_budget") or 0) or None,
-        )
-    except Exception:  # noqa: BLE001
-        status_bar.update_context(used=0, budget=None)
+    _sync_footer_context(agents, current.session_id, status_bar)
 
     def _plan_provider():
         try:
@@ -239,25 +241,17 @@ def run_cli(
     )
 
     def _refresh_context_footer() -> None:
-        try:
-            ctx = agents.get_context_status(current.session_id)
-            status_bar.update_context(
-                used=ctx.total_tokens,
-                budget=int(ctx.budget.get("usable_budget") or 0) or None,
-            )
-        except Exception:  # noqa: BLE001
-            pass
+        _sync_footer_context(agents, current.session_id, status_bar)
 
     def _prompt_toolbar() -> object:
-        # OpenCode 风格 footer：左 workspace，右 title/model/完整 token
-        _refresh_context_footer()
+        # 仅渲染缓存 footer；勿在此做 DB / context 计算（prompt_toolkit 每键都会调）
         return status_bar.toolbar_text()
 
     while True:
-        # 非 TTY / 测试：在提示前打印一行 footer；TTY 用 bottom_toolbar（不占对话区）
+        # 每轮输入前刷新一次 token；TTY 底栏 callback 会在按键时高频触发
+        _refresh_context_footer()
         use_toolbar = input_fn is read_user_input
         if not use_toolbar:
-            _refresh_context_footer()
             status_bar.print_line(output_fn)
             user_text = input_fn("> ")
         else:
@@ -403,7 +397,7 @@ def run_cli(
                 continue
             live_sink.set_model_id(current.model_id)
             status_bar.update_from_session(current)
-            status_bar.update_context(used=None, budget=None)
+            _sync_footer_context(agents, current.session_id, status_bar)
             output_fn(
                 f"已创建 Session: {current.session_id} ({current.title})\n"
                 f"Model: {current.provider_id}/{current.model_id}"
@@ -438,14 +432,7 @@ def run_cli(
             current = nxt
             live_sink.set_model_id(current.model_id)
             status_bar.update_from_session(current)
-            try:
-                ctx = agents.get_context_status(current.session_id)
-                status_bar.update_context(
-                    used=ctx.total_tokens,
-                    budget=int(ctx.budget.get("usable_budget") or 0) or None,
-                )
-            except Exception:  # noqa: BLE001
-                status_bar.update_context(used=None, budget=None)
+            _sync_footer_context(agents, current.session_id, status_bar)
             # 切换成功即可；Session/Model/Workspace 已在 banner / footer，勿再刷系统信息
             continue
 
@@ -491,7 +478,7 @@ def run_cli(
                     return 1
                 live_sink.set_model_id(current.model_id)
                 status_bar.update_from_session(current)
-                status_bar.update_context(used=None, budget=None)
+                _sync_footer_context(agents, current.session_id, status_bar)
                 output_fn(
                     f"已切换到新 Session: {current.session_id} ({current.title})"
                 )
@@ -532,14 +519,7 @@ def run_cli(
             )
             current = result.session
             status_bar.update_from_session(current)
-            try:
-                ctx = agents.get_context_status(current.session_id)
-                status_bar.update_context(
-                    used=ctx.total_tokens,
-                    budget=int(ctx.budget.get("usable_budget") or 0) or None,
-                )
-            except Exception:  # noqa: BLE001
-                pass
+            _sync_footer_context(agents, current.session_id, status_bar)
         except CodeWispError as exc:
             output_fn(f"错误：{exc}")
             continue

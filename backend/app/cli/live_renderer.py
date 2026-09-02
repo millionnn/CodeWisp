@@ -7,7 +7,8 @@ from collections.abc import Callable
 from typing import Any
 
 from backend.app.agent.events import AgentEvent
-from backend.app.cli.render_plan import PlanView, format_plan_panel, truncate_display
+from backend.app.cli.render_plan import PlanStepView, PlanView, format_plan_panel, truncate_display
+from backend.app.cli.render_trace import compact_trace_line
 from backend.app.cli.theme import get_theme, terminal_width
 from backend.app.cli.trace import render_live_event
 from backend.app.context.plan_events import (
@@ -86,9 +87,40 @@ def _colorize_plan_line(line: str) -> str:
         return f"\033[1;38;5;203m{line}\033[0m"
     if line.startswith("Plan"):
         return f"\033[1;38;5;80m{line}\033[0m"
+    if line.startswith("○"):
+        return f"\033[2;38;5;105m{line}\033[0m"
     if line.startswith("     "):
-        return _colorize_tool_activity_line(line)
+        return _colorize_trace_or_tool_line(line)
     return f"\033[2;38;5;245m{line}\033[0m"
+
+
+def _is_trace_content(stripped: str) -> bool:
+    if not stripped or stripped == "…":
+        return False
+    if stripped[0] in {"✅", "❌"}:
+        return True
+    if stripped[0] in "◇✓✗":
+        return False
+    return "+" in stripped and "." in stripped.split()[0]
+
+
+def _colorize_trace_or_tool_line(line: str) -> str:
+    stripped = line.lstrip(" ")
+    indent = line[: len(line) - len(stripped)]
+    if _is_trace_content(stripped):
+        if stripped.startswith("✅"):
+            return f"{indent}\033[1;38;5;78m{stripped}\033[0m"
+        if stripped.startswith("❌"):
+            return f"{indent}\033[1;38;5;203m{stripped}\033[0m"
+        # 文件变更：path 高亮 + 绿+/红-
+        parts = stripped.split(None, 1)
+        path = parts[0]
+        stats = parts[1] if len(parts) > 1 else ""
+        out = f"{indent}\033[1;38;5;117m{path}\033[0m"
+        if stats:
+            out += f" \033[2;38;5;245m{stats}\033[0m"
+        return out
+    return _colorize_tool_activity_line(line)
 
 
 def _colorize_tool_activity_line(line: str) -> str:
@@ -224,13 +256,27 @@ class CliLiveRenderer:
                     )
             self.plan_view.activity = self._activity
             self._paint_plan(force=True)
-            # 完成后立刻冻结：禁止后续工具再 cursor-up 擦屏
-            self.stop()
+            # 不在此处 stop：Agent 常在 plan_completed 之后继续调工具
             return
 
+    def _resolve_tool_step(self) -> PlanStepView | None:
+        """工具行挂到哪一步：优先 in_progress；Plan 已全绿则填第一个空槽。"""
+        if self.plan_view is None:
+            return None
+        steps = sorted(self.plan_view.steps, key=lambda s: s.step_index)
+        active = next((s for s in steps if s.status == "in_progress"), None)
+        if active is not None:
+            return active
+        for step in steps:
+            if step.status in {"completed", "failed", "blocked", "skipped"}:
+                if not step.tool_line.strip():
+                    return step
+        return steps[-1] if steps else None
+
     def handle_tool_event(self, event: AgentEvent) -> None:
-        """当前 in_progress 步骤下只刷新一行工具摘要；Plan 冻结后不再展示。"""
+        """当前 in_progress 步骤下只刷新一行工具摘要；Plan 底栏 trace 单行刷新。"""
         self._activity = compact_tool_activity(event)
+        trace = compact_trace_line(event)
         if self._show_tool_trace:
             self.stop()
             self._pending_fail, self._last_step = render_live_event(
@@ -245,17 +291,14 @@ class CliLiveRenderer:
         if self.plan_view is None or self._stopped:
             return
 
+        if trace:
+            self.plan_view.trace_line = trace
         self.plan_view.activity = self._activity
-        active = next(
-            (s for s in self.plan_view.steps if s.status == "in_progress"),
-            None,
-        )
-        target = active
-        # complete_plan_step 在 execute 时已推进 Plan：工具行挂在刚完成的那一步
+        # 完成信号只推进步骤，不覆盖该步已挂的工具摘要行
         if event.tool_name == "complete_plan_step":
-            done = [s for s in self.plan_view.steps if s.status == "completed"]
-            if done:
-                target = max(done, key=lambda s: s.step_index)
+            self._paint_plan()
+            return
+        target = self._resolve_tool_step()
         if target is not None:
             target.tool_line = self._activity  # 覆盖刷新，不堆多行
         self._paint_plan()
@@ -308,6 +351,7 @@ class CliLiveRenderer:
             )
         self._activity = ""
         self.plan_view.activity = ""
+        self.plan_view.trace_line = ""
         self._stopped = False
         self._paint_plan(force=True)
 

@@ -10,7 +10,7 @@ from backend.app.cli.live_renderer import CliLiveRenderer
 from backend.app.cli.render_plan import format_plan_panel, plan_from_domain
 from backend.app.context.budget import ContextBudget
 from backend.app.context.manager import DefaultContextManager
-from backend.app.context.models import Plan, PlanStepStatus
+from backend.app.context.models import Plan, PlanStatus, PlanStepStatus
 from backend.app.context.plan_events import (
     PLAN_COMPLETED,
     PLAN_CREATED,
@@ -390,9 +390,57 @@ def test_plan_advances_on_explore_then_edit(tmp_path: Path) -> None:
     assert any(e.event_type == PLAN_STEP_COMPLETED for e in recorded.events)
     in_prog = [s for s in cm.plan.steps if s.status == PlanStepStatus.IN_PROGRESS]
     assert len(in_prog) == 1
+    # 须逐步完成剩余条目，最终回答不再批量跳过
+    while cm.plan_has_open_steps():
+        cm.complete_current_step(note="done")
+        cm.begin_agent_turn()
     cm.update_after_assistant("任务完成，测试通过。")
     assert cm.plan.status.value == "completed"
     assert any(e.event_type == PLAN_COMPLETED for e in recorded.events)
+
+
+def test_complete_plan_step_once_per_agent_turn(tmp_path: Path) -> None:
+    store = SqliteStore(tmp_path / "once.db")
+    store.connect()
+    session = SessionService(store).create_session(workspace=str(tmp_path), title="once")
+    repo = ContextRepository(store)
+    cm = DefaultContextManager(
+        session_id=session.session_id,
+        workspace_root=str(tmp_path),
+        budget=ContextBudget.from_context_window(32_000),
+        repository=repo,
+    )
+    cm.begin_run("任务", agent_run_id=None)
+    assert cm.plan is not None
+    first = cm.complete_current_step(note="step1")
+    assert first["ok"] is True
+    second = cm.complete_current_step(note="step2")
+    assert second["ok"] is False
+    cm.begin_agent_turn()
+    third = cm.complete_current_step(note="step2")
+    assert third["ok"] is True
+
+
+def test_final_answer_does_not_bulk_complete_open_steps(tmp_path: Path) -> None:
+    store = SqliteStore(tmp_path / "bulk.db")
+    store.connect()
+    session = SessionService(store).create_session(workspace=str(tmp_path), title="bulk")
+    repo = ContextRepository(store)
+    cm = DefaultContextManager(
+        session_id=session.session_id,
+        workspace_root=str(tmp_path),
+        budget=ContextBudget.from_context_window(32_000),
+        repository=repo,
+    )
+    cm.begin_run("多步任务", agent_run_id=None)
+    assert cm.plan is not None
+    cm.complete_current_step(note="only first")
+    cm.begin_agent_turn()
+    assert cm.plan.steps[0].status == PlanStepStatus.COMPLETED
+    assert cm.plan.steps[1].status == PlanStepStatus.IN_PROGRESS
+    cm.update_after_assistant("全部完成了。")
+    assert cm.plan.steps[1].status == PlanStepStatus.IN_PROGRESS
+    assert cm.plan.status != PlanStatus.COMPLETED
 
 
 def test_plan_advances_design_step_on_read(tmp_path: Path) -> None:
@@ -479,6 +527,61 @@ def test_renderer_keeps_all_steps_when_created_again_with_one_step() -> None:
     view = r.plan_view
     assert view is not None
     assert len(view.steps) == 6
+
+
+def test_compact_trace_line_edit_and_command() -> None:
+    from backend.app.cli.render_trace import compact_trace_line
+
+    edit = compact_trace_line(
+        AgentEvent(
+            event_type="tool_completed",
+            step=1,
+            tool_name="edit_file",
+            metadata={
+                "arguments": {
+                    "path": "src/taskflow/calculator.py",
+                    "old_text": "a\nb\nc\nd",
+                    "new_text": "x\ny\nz",
+                },
+                "replacements": 1,
+            },
+        )
+    )
+    assert edit == "calculator.py +3-4"
+
+    cmd_ok = compact_trace_line(
+        AgentEvent(
+            event_type="tool_completed",
+            step=2,
+            tool_name="run_command",
+            metadata={"arguments": {"command": "pytest", "args": []}},
+        )
+    )
+    assert cmd_ok == "✅ pytest"
+
+    cmd_fail = compact_trace_line(
+        AgentEvent(
+            event_type="tool_failed",
+            step=3,
+            tool_name="run_command",
+            metadata={"arguments": {"command": "pytest", "args": ["-q"]}},
+        )
+    )
+    assert cmd_fail == "❌ pytest"
+
+
+def test_plan_trace_line_refreshes_in_panel() -> None:
+    from backend.app.cli.render_plan import PlanView, format_plan_panel
+
+    view = PlanView(plan_id="p", steps=[])
+    view.trace_line = "calculator.py +3-4"
+    a = format_plan_panel(view, stable_height=True)
+    assert "calculator.py +3-4" in a
+    view.trace_line = "❌ pytest"
+    b = format_plan_panel(view, stable_height=True)
+    assert "❌ pytest" in b
+    assert "calculator.py" not in b
+    assert len(a.split("\n")) == len(b.split("\n"))
 
 
 def test_format_plan_stable_height() -> None:
@@ -573,6 +676,213 @@ def test_tool_activity_survives_step_transition() -> None:
     last = [o for o in outputs if isinstance(o, str) and o.startswith("Plan")][-1]
     assert "…" not in last or "read_file" in last
     assert "read_file" in last
+
+
+def test_complete_plan_step_does_not_overwrite_tool_line() -> None:
+    """complete_plan_step 只推进步骤，不覆盖该步已挂的工具行。"""
+    outputs: list[str] = []
+    r = CliLiveRenderer(output_fn=outputs.append, interactive=False)
+    r.handle_plan_event(
+        AgentEvent(
+            event_type=PLAN_CREATED,
+            step=0,
+            metadata={
+                "plan_id": "p1",
+                "steps": [
+                    {
+                        "step_id": "s0",
+                        "step_index": 0,
+                        "title": "Inspect",
+                        "status": "in_progress",
+                    },
+                    {
+                        "step_id": "s1",
+                        "step_index": 1,
+                        "title": "Fix",
+                        "status": "pending",
+                    },
+                ],
+            },
+        )
+    )
+    r.handle_tool_event(
+        AgentEvent(
+            event_type="tool_completed",
+            step=1,
+            tool_name="read_file",
+            metadata={"arguments": {"path": "a.py"}},
+        )
+    )
+    assert r.plan_view is not None
+    assert "read_file" in r.plan_view.steps[0].tool_line
+    r.handle_tool_event(
+        AgentEvent(
+            event_type="tool_completed",
+            step=2,
+            tool_name="complete_plan_step",
+            metadata={"arguments": {"note": "done"}},
+        )
+    )
+    assert "read_file" in r.plan_view.steps[0].tool_line
+    assert "complete_plan_step" not in r.plan_view.steps[0].tool_line
+
+
+def test_multi_step_each_keeps_own_tool_line() -> None:
+    """条目 1 完成后，条目 2 挂自己的工具行；两步工具行都保留。"""
+    outputs: list[str] = []
+    r = CliLiveRenderer(output_fn=outputs.append, interactive=False)
+    r.handle_plan_event(
+        AgentEvent(
+            event_type=PLAN_CREATED,
+            step=0,
+            metadata={
+                "plan_id": "p1",
+                "steps": [
+                    {
+                        "step_id": "s0",
+                        "step_index": 0,
+                        "title": "Inspect",
+                        "status": "in_progress",
+                    },
+                    {
+                        "step_id": "s1",
+                        "step_index": 1,
+                        "title": "Fix",
+                        "status": "pending",
+                    },
+                ],
+            },
+        )
+    )
+    r.handle_tool_event(
+        AgentEvent(
+            event_type="tool_completed",
+            step=1,
+            tool_name="read_file",
+            metadata={"arguments": {"path": "a.py"}},
+        )
+    )
+    r.handle_plan_event(
+        AgentEvent(
+            event_type=PLAN_STEP_COMPLETED,
+            step=1,
+            metadata={
+                "step_id": "s0",
+                "step_index": 0,
+                "title": "Inspect",
+                "status": "completed",
+            },
+        )
+    )
+    r.handle_plan_event(
+        AgentEvent(
+            event_type=PLAN_STEP_STARTED,
+            step=1,
+            metadata={
+                "step_id": "s1",
+                "step_index": 1,
+                "title": "Fix",
+                "status": "in_progress",
+            },
+        )
+    )
+    r.handle_tool_event(
+        AgentEvent(
+            event_type="tool_completed",
+            step=2,
+            tool_name="edit_file",
+            metadata={"arguments": {"path": "b.py"}},
+        )
+    )
+    last = [o for o in outputs if isinstance(o, str) and o.startswith("Plan")][-1]
+    assert "✓ 1. Inspect" in last
+    assert "read_file" in last
+    assert "● 2. Fix" in last
+    assert "edit_file" in last
+    assert r.plan_view is not None
+    assert "read_file" in r.plan_view.steps[0].tool_line
+    assert "edit_file" in r.plan_view.steps[1].tool_line
+
+
+def test_tools_after_plan_completed_fill_empty_steps() -> None:
+    """模型先连发 complete_plan_step 再 edit/pytest 时，工具行仍填到各条目。"""
+    outputs: list[str] = []
+    r = CliLiveRenderer(output_fn=outputs.append, interactive=False)
+    titles = [
+        "检查并修复 is_overdue()",
+        "检查并修复 due_date 引用",
+        "运行单元测试验证",
+    ]
+    r.handle_plan_event(
+        AgentEvent(
+            event_type=PLAN_CREATED,
+            step=0,
+            metadata={
+                "plan_id": "p1",
+                "steps": [
+                    {
+                        "step_id": f"s{i}",
+                        "step_index": i,
+                        "title": t,
+                        "status": "in_progress" if i == 0 else "pending",
+                    }
+                    for i, t in enumerate(titles)
+                ],
+            },
+        )
+    )
+    r.handle_tool_event(
+        AgentEvent(
+            event_type="tool_completed",
+            step=1,
+            tool_name="read_file",
+            metadata={"arguments": {"path": "tests/test_sla.py"}},
+        )
+    )
+    r.handle_plan_event(
+        AgentEvent(
+            event_type=PLAN_COMPLETED,
+            step=2,
+            metadata={
+                "plan_id": "p1",
+                "status": "completed",
+                "steps": [
+                    {
+                        "step_id": f"s{i}",
+                        "step_index": i,
+                        "title": t,
+                        "status": "completed",
+                    }
+                    for i, t in enumerate(titles)
+                ],
+            },
+        )
+    )
+    assert r.is_stopped() is False
+    r.handle_tool_event(
+        AgentEvent(
+            event_type="tool_completed",
+            step=3,
+            tool_name="edit_file",
+            metadata={"arguments": {"path": "sla.py"}},
+        )
+    )
+    r.handle_tool_event(
+        AgentEvent(
+            event_type="tool_completed",
+            step=4,
+            tool_name="run_command",
+            metadata={"arguments": {"command": "pytest", "args": []}},
+        )
+    )
+    last = [o for o in outputs if isinstance(o, str) and o.startswith("Plan")][-1]
+    assert "read_file" in last
+    assert "edit_file" in last
+    assert "pytest" in last
+    assert r.plan_view is not None
+    assert "read_file" in r.plan_view.steps[0].tool_line
+    assert "edit_file" in r.plan_view.steps[1].tool_line
+    assert "pytest" in r.plan_view.steps[2].tool_line
 
 
 def test_speculative_answer_delta_does_not_stop_plan_or_print() -> None:

@@ -30,8 +30,14 @@ CODEWISP_THEME = Theme(
         "cw.step": "dim #64748b",
         "cw.plan": "bold #2dd4bf",
         "cw.tool": "dim #67e8f9",
+        "cw.answer": "bold #ddd6fe",
+        "cw.git": "bold #fb923c",
+        "cw.lsp": "bold #38bdf8",
         "cw.border": "#334155",
         "cw.border.accent": "#2dd4bf",
+        "cw.border.answer": "#c4b5fd",
+        "cw.border.git": "#fb923c",
+        "cw.border.lsp": "#38bdf8",
         "cw.border.warn": "#fbbf24",
         "cw.border.ok": "#34d399",
         "cw.diff.file": "bold #e2e8f0",
@@ -46,6 +52,9 @@ CODEWISP_THEME = Theme(
 
 # Panel 边框语义色（传给 border_style）
 BORDER_ACCENT = "cw.border.accent"
+BORDER_ANSWER = "cw.border.answer"
+BORDER_GIT = "cw.border.git"
+BORDER_LSP = "cw.border.lsp"
 BORDER_MUTED = "cw.border"
 BORDER_WARN = "cw.border.warn"
 BORDER_OK = "cw.border.ok"

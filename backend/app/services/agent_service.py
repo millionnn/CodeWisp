@@ -455,6 +455,20 @@ class AgentService:
         conversation = self._conversations.load_conversation(session_id)
         return cm.status(conversation)
 
+    def get_session_token_footer(self, session_id: str) -> tuple[int, int]:
+        """CLI footer：(已用 tokens, 模型可用预算)。预算始终来自当前 model context_window。"""
+        session = self.sessions.get_session(session_id)
+        cm = self._get_or_create_context_manager(session)
+        usable = cm.budget.usable_budget
+        try:
+            conversation = self._conversations.load_conversation(session_id)
+            status = cm.status(conversation)
+            used = max(0, int(status.total_tokens))
+            budget = max(0, int(status.budget.get("usable_budget") or usable))
+            return used, budget
+        except Exception:  # noqa: BLE001
+            return 0, usable
+
     def compact_context(
         self,
         session_id: str,

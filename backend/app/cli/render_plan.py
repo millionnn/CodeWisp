@@ -46,6 +46,7 @@ class PlanView:
     steps: list[PlanStepView] = field(default_factory=list)
     completed_banner: bool = False
     activity: str = ""
+    trace_line: str = ""  # Plan 底栏：最新文件变更 / 命令结果（单行刷新）
 
     def upsert_step(
         self,
@@ -207,6 +208,14 @@ def format_plan_panel(
     if stable_height and activity_slots == 0:
         lines.append("     ")
 
+    # Plan 底栏 trace（单行，刷新覆盖）
+    if stable_height:
+        trace = (view.trace_line or "").strip()
+        trace_row = f"     {trace}" if trace else "     "
+        if width is not None:
+            trace_row = truncate_display(trace_row, width)
+        lines.append(trace_row)
+
     if stable_height:
         lines.append("")
         if view.completed_banner or view.status == "completed":
@@ -245,12 +254,46 @@ def plan_renderable(view: PlanView | Plan | None) -> Any:
         elif line.startswith("Plan"):
             parts.append(Text(line, style="bold #2dd4bf"))
         elif line.startswith("     "):
-            parts.append(_tool_activity_rich(line))
-        elif line.startswith("○") or line.startswith("⊘"):
+            parts.append(_indented_plan_rich(line))
+        elif line.startswith("○"):
+            parts.append(Text(line, style="dim #818cf8"))
+        elif line.startswith("⊘"):
             parts.append(Text(line, style="dim #94a3b8"))
         else:
             parts.append(Text(line, style="dim #94a3b8"))
     return Group(*parts)
+
+
+def _is_trace_content(stripped: str) -> bool:
+    if not stripped or stripped == "…":
+        return False
+    if stripped[0] in {"✅", "❌"}:
+        return True
+    if stripped[0] in "◇✓✗":
+        return False
+    return "+" in stripped and "." in stripped.split()[0]
+
+
+def _indented_plan_rich(line: str) -> Any:
+    from rich.text import Text
+
+    stripped = line.lstrip(" ")
+    indent = line[: len(line) - len(stripped)]
+    if _is_trace_content(stripped):
+        t = Text(indent)
+        if stripped.startswith("✅"):
+            t.append(stripped, style="bold #34d399")
+            return t
+        if stripped.startswith("❌"):
+            t.append(stripped, style="bold #f87171")
+            return t
+        parts = stripped.split(None, 1)
+        t.append(parts[0], style="bold #7dd3fc")
+        if len(parts) > 1:
+            t.append(" ")
+            t.append(parts[1], style="dim #94a3b8")
+        return t
+    return _tool_activity_rich(line)
 
 
 def _tool_activity_rich(line: str) -> Any:

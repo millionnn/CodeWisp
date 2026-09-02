@@ -333,3 +333,38 @@ def test_events_include_lifecycle() -> None:
     assert types[0] == "agent_started"
     assert "llm_called" in types
     assert types[-1] == "agent_completed"
+
+
+def test_loop_rejects_final_answer_while_plan_open(tmp_path: Path) -> None:
+    """Plan 未逐步完成时，不得提前输出最终回答。"""
+    from backend.app.context.budget import ContextBudget
+    from backend.app.context.manager import DefaultContextManager
+    from backend.app.persistence.context_repository import ContextRepository
+    from backend.app.persistence.store import SqliteStore
+    from backend.app.session.service import SessionService
+
+    store = SqliteStore(tmp_path / "plan_loop.db")
+    store.connect()
+    session = SessionService(store).create_session(workspace=str(tmp_path), title="p")
+    cm = DefaultContextManager(
+        session_id=session.session_id,
+        workspace_root=str(tmp_path),
+        budget=ContextBudget.from_context_window(32_000),
+        repository=ContextRepository(store),
+    )
+    cm.begin_run("修复 bug", agent_run_id=None)
+
+    loop, llm = _agent(
+        [
+            LLMResponse(content="我已经全部修好了。", finish_reason="stop"),
+            LLMResponse(content="我继续做当前步骤。", finish_reason="stop"),
+        ],
+        max_steps=2,
+    )
+    loop.context_manager = cm
+    state = loop.run("修 bug")
+    assert len(llm.calls) == 2
+    assert state.final_answer != "我已经全部修好了。"
+    nudge_msgs = [m for m in llm.calls[1]["messages"] if m["role"] == "user"]
+    assert any("Plan 尚未逐步完成" in m["content"] for m in nudge_msgs)
+    assert cm.plan_has_open_steps()

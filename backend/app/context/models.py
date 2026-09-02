@@ -362,9 +362,10 @@ class Plan:
             "## Plan",
             f"Goal: {self.goal}",
             f"Status: {self.status.value}",
-            "Rules: Work ONLY on the [>] step. When that step is done, call tool "
-            "complete_plan_step before starting the next. If a step needs no tools, "
-            "still call complete_plan_step after you finish it.",
+            "Rules: Work ONLY on the [>] step. Use as many tools as needed on that step. "
+            "When that step is done, call complete_plan_step once (one per LLM turn), "
+            "then work on the next step. Do not give the final answer until every step "
+            "is completed this way.",
         ]
         for step in sorted(self.steps, key=lambda s: s.step_index):
             mark = {

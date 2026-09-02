@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from backend.app.cli.theme import (
-    BORDER_ACCENT,
+    BORDER_ANSWER,
     get_theme,
     make_console,
     styled_panel,
@@ -62,11 +62,11 @@ def render_markdown(
     console.print(
         styled_panel(
             content,
-            title="[cw.plan]✦ Final Answer[/]",
-            border=BORDER_ACCENT,
+            title="[cw.answer]✦ Final Answer[/]",
+            border=BORDER_ANSWER,
             padding=(1, 2),
             width=width,
-            subtitle="[cw.dim]CodeWisp[/]",
+            subtitle="[dim #94a3b8]CodeWisp[/]",
         ),
         soft_wrap=True,
         overflow="fold",

@@ -7,6 +7,8 @@ from typing import Any
 
 from backend.app.cli.theme import (
     BORDER_ACCENT,
+    BORDER_GIT,
+    BORDER_LSP,
     BORDER_MUTED,
     BORDER_WARN,
     get_theme,
@@ -25,6 +27,9 @@ def render_section(
     *,
     output_fn: Callable[[str], None],
     footer: str | None = None,
+    border: str = BORDER_ACCENT,
+    icon: str = "◆",
+    title_style: str = "cw.brand",
 ) -> None:
     """键值对区块。"""
     if _use_rich(output_fn):
@@ -44,8 +49,8 @@ def render_section(
         make_console().print(
             styled_panel(
                 body,
-                title=f"[cw.brand]◆[/] [cw.brand]{title}[/]",
-                border=BORDER_ACCENT,
+                title=f"[{title_style}]{icon}[/] [{title_style}]{title}[/]",
+                border=border,
                 padding=(0, 1),
             )
         )
@@ -74,7 +79,14 @@ def render_git_status(status: Any, *, output_fn: Callable[[str], None]) -> None:
         ("Untracked", str(status.untracked_count)),
         ("Clean", "yes" if status.clean else "no"),
     ]
-    render_section("Git Repository", rows, output_fn=output_fn)
+    render_section(
+        "Git Repository",
+        rows,
+        output_fn=output_fn,
+        border=BORDER_GIT,
+        icon="⎇",
+        title_style="cw.git",
+    )
 
     if status.clean or not status.all_files:
         return
@@ -99,8 +111,8 @@ def render_git_status(status: Any, *, output_fn: Callable[[str], None]) -> None:
         make_console().print(
             styled_panel(
                 body,
-                title="[cw.info]📂[/] [cw.info]Working Tree[/]",
-                border=BORDER_MUTED,
+                title="[cw.git]📂[/] [cw.git]Working Tree[/]",
+                border=BORDER_GIT,
             )
         )
     else:
@@ -114,15 +126,15 @@ def render_git_log(commits: list, *, output_fn: Callable[[str], None]) -> None:
         from rich.table import Table
 
         table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
-        table.add_column("Commit", style="cw.info", no_wrap=True)
+        table.add_column("Commit", style="cw.git", no_wrap=True)
         table.add_column("Message", style="cw.value")
         for c in commits:
             table.add_row(c.short_id, c.message)
         make_console().print(
             styled_panel(
                 table,
-                title=f"[cw.brand]⏱[/] [cw.brand]Recent commits[/] [cw.dim]({len(commits)})[/]",
-                border=BORDER_ACCENT,
+                title=f"[cw.git]⏱[/] [cw.git]Recent commits[/] [cw.dim]({len(commits)})[/]",
+                border=BORDER_GIT,
             )
         )
         return
@@ -146,7 +158,14 @@ def render_lsp_status(status: Any, *, output_fn: Callable[[str], None]) -> None:
     ]
     if status.message:
         rows.append(("Note", status.message))
-    render_section("Code Intelligence", rows, output_fn=output_fn)
+    render_section(
+        "Code Intelligence",
+        rows,
+        output_fn=output_fn,
+        border=BORDER_LSP,
+        icon="◈",
+        title_style="cw.lsp",
+    )
 
 
 def render_lsp_diagnostics(
@@ -232,8 +251,8 @@ def render_git_diff(diff: Any, *, output_fn: Callable[[str], None]) -> None:
         make_console().print(
             styled_panel(
                 body,
-                title="[cw.brand]±[/] [cw.brand]Git Diff[/]",
-                border=BORDER_ACCENT,
+                title="[cw.git]±[/] [cw.git]Git Diff[/]",
+                border=BORDER_GIT,
             )
         )
         return
@@ -251,7 +270,14 @@ def render_git_branches(
     output_fn: Callable[[str], None],
 ) -> None:
     rows = [("Current", current or "(detached)")]
-    render_section("Git Branches", rows, output_fn=output_fn)
+    render_section(
+        "Git Branches",
+        rows,
+        output_fn=output_fn,
+        border=BORDER_GIT,
+        icon="🌿",
+        title_style="cw.git",
+    )
     if _use_rich(output_fn):
         from rich.text import Text
 
@@ -291,8 +317,8 @@ def render_lsp_symbols(path: str, symbols: list, *, output_fn: Callable[[str], N
         make_console().print(
             styled_panel(
                 body,
-                title=f"[cw.brand]◈[/] [cw.brand]Symbols[/] [cw.dim]{path}[/]",
-                border=BORDER_ACCENT,
+                title="[cw.lsp]◈[/] [cw.lsp]Symbols[/] [cw.dim]{path}[/]",
+                border=BORDER_LSP,
             )
         )
         return

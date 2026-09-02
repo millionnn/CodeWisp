@@ -153,6 +153,20 @@ class DefaultContextManager:
         self._last_status: ContextStatus | None = None
         self._compaction_count = 0
         self._loaded = False
+        self._plan_complete_signaled_this_turn = False
+
+    def begin_agent_turn(self) -> None:
+        """新一轮 LLM 调用开始：重置 complete_plan_step 每轮一次限制。"""
+        self._plan_complete_signaled_this_turn = False
+
+    def plan_has_open_steps(self) -> bool:
+        """Plan 是否仍有未逐步完成的条目（pending / in_progress）。"""
+        if not self.plan or self.plan.status == PlanStatus.COMPLETED:
+            return False
+        return any(
+            s.status in {PlanStepStatus.PENDING, PlanStepStatus.IN_PROGRESS}
+            for s in self.plan.steps
+        )
 
     def set_event_emitter(self, emitter: Any | None) -> None:
         """由 AgentService 注入；CLI/Web 经 AgentEventSink 消费。"""
@@ -429,7 +443,18 @@ class DefaultContextManager:
                 self.task.touch()
                 self._save_task()
         if self.plan:
-            self._complete_remaining_plan_steps()
+            self._finalize_plan_if_all_steps_done()
+
+    def _finalize_plan_if_all_steps_done(self) -> None:
+        """仅在所有条目均已逐步完成后才发 plan_completed；不批量跳过未完成步骤。"""
+        if not self.plan or self.plan.status == PlanStatus.COMPLETED:
+            return
+        if all(
+            s.status in {PlanStepStatus.COMPLETED, PlanStepStatus.SKIPPED}
+            for s in self.plan.steps
+        ):
+            self._mark_plan_completed()
+            self._save_plan()
 
     def update_after_tool(
         self,
@@ -860,9 +885,19 @@ class DefaultContextManager:
         self.ensure_loaded()
         if not self.plan or self.plan.status == PlanStatus.COMPLETED:
             return {"ok": False, "error": "no active plan"}
+        if self._plan_complete_signaled_this_turn:
+            return {
+                "ok": False,
+                "error": (
+                    "每轮 LLM 只能调用一次 complete_plan_step。"
+                    "请在本轮先完成当前 [>] 步骤所需的工具调用，"
+                    "再调用 complete_plan_step；下一步的工具留到下一轮。"
+                ),
+            }
         step = self._current_in_progress_step()
         if step is None:
             return {"ok": False, "error": "no in_progress plan step"}
+        self._plan_complete_signaled_this_turn = True
         reason = note.strip() or None
         self._set_step_status(step, PlanStepStatus.COMPLETED, reason=reason)
         if self.task:
@@ -884,14 +919,8 @@ class DefaultContextManager:
         }
 
     def _complete_remaining_plan_steps(self) -> None:
-        """最终回答时收尾：未完成步骤标 completed，发 plan_completed。"""
-        if not self.plan or self.plan.status == PlanStatus.COMPLETED:
-            return
-        for step in sorted(self.plan.steps, key=lambda s: s.step_index):
-            if step.status in {PlanStepStatus.PENDING, PlanStepStatus.IN_PROGRESS}:
-                self._set_step_status(step, PlanStepStatus.COMPLETED)
-        self._mark_plan_completed()
-        self._save_plan()
+        """兼容旧名：不再批量标完成未完成步骤。"""
+        self._finalize_plan_if_all_steps_done()
 
     def _activate_next_plan_step(self) -> None:
         if not self.plan:

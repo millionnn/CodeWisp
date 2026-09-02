@@ -144,7 +144,7 @@ class CliEventSink:
         if not self._answer_header_shown:
             self._stream_write_fn("\n")
             if self._interactive and get_theme().color:
-                self._stream_write_fn(f"\033[1;38;5;80m{_ANSWER_HEADER}\033[0m")
+                self._stream_write_fn(f"\033[1;38;5;189m{_ANSWER_HEADER}\033[0m")
             else:
                 self._stream_write_fn(_ANSWER_HEADER)
             self._stream_write_fn("\n")
@@ -179,11 +179,6 @@ class CliEventSink:
         if et in PLAN_EVENT_TYPES:
             self._stop_tool_spinner()
             self._renderer.handle_plan_event(event)
-            if et == "plan_completed":
-                # 冻结清单：之后禁止 cursor-up 改写（否则会擦掉下方内容）
-                self._renderer.stop()
-                # 不立刻 flush 缓冲正文——可能仍是工具轮推测文字
-                # hold 仅在「完成后又出现工具」时打开，以便纯最终回答仍可真流式
             return
 
         if et in {"tool_called", "tool_completed", "tool_failed"}:
